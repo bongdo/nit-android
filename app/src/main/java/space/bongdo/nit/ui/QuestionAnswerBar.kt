@@ -93,12 +93,13 @@ fun QuestionAnswerBar(
             if (!current.options.isNullOrEmpty()) {
                 Column(Modifier.padding(top = 4.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     current.options!!.forEach { option ->
-                        val selected = values[current.key] == option.value
+                        val optionValue = option.value.ifBlank { option.label }
+                        val selected = values[current.key] == optionValue
                         Row(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(8.dp))
-                                .clickable { values[current.key] = option.value }
+                                .clickable { values[current.key] = optionValue }
                                 .background(
                                     if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
                                     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),

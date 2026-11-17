@@ -81,8 +81,6 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         }
     }
 
-    LaunchedEffect(state.selected?.id) { attachments = emptyList() }
-
     LaunchedEffect(state.messages.size, state.running) {
         if (state.messages.isNotEmpty() && atBottom) {
             listState.scrollToItem(state.messages.lastIndex)
@@ -203,13 +201,13 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             if (state.permissions.isNotEmpty()) {
                 PermissionStrip(state.permissions, viewModel::replyPermission)
             }
-            questionForm?.let {
+            if (questionForm != null) {
                 QuestionAnswerBar(
-                    form = it,
+                    form = questionForm,
                     onReply = viewModel::replyForm,
                     onCancel = viewModel::cancelForm,
                 )
-            }
+            } else {
             Composer(
                 value = state.draft,
                 onValueChange = viewModel::setDraft,
@@ -253,7 +251,8 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                         "help" -> viewModel.note("Команды: /new /dir /settings /compact /revert /fork /fork-here /retry /theme /clear /help")
                     }
                 },
-            )
+                )
+            }
         }
     }
 

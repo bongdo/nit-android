@@ -67,7 +67,7 @@ fun fileTarget(raw: String): FileTarget? {
     val parts = path.split('/').filter { it.isNotBlank() && it != "." }
     if (parts.isEmpty() || parts.any { it == ".." || !Regex("""^[A-Za-z0-9_.@+-]+$""").matches(it) }) return null
     if (parts.size == 1) {
-        if (!Regex("""\.(md|markdown|txt|ts|tsx|js|jsx|mjs|cjs|go|py|json|jsonl|ya?ml|toml|css|scss|html?|sh|bash|zsh|sql|rs|java|kt|kts|c|h|cpp|hpp|cs|rb|php|swift|xml|ini|conf|lock|mod|sum|env|svg|c3|zig|nim|str|dart|nix|lua|hs|ex|exs|erl|clj|scala|sol|vue|svelte)$""", RegexOption.IGNORE_CASE).containsMatchIn(path)) return null
+        if (!Regex("""\.(md|markdown|txt|ts|tsx|js|jsx|mjs|cjs|go|py|json|jsonl|ya?ml|toml|css|scss|html?|sh|bash|zsh|sql|rs|java|kt|kts|c|h|cpp|hpp|cs|rb|php|swift|xml|ini|conf|lock|mod|sum|env|svg|png|jpe?g|gif|webp|pdf|mp3|mp4|wav|c3|zig|nim|str|dart|nix|lua|hs|ex|exs|erl|clj|scala|sol|vue|svelte)$""", RegexOption.IGNORE_CASE).containsMatchIn(path)) return null
     }
     return FileTarget(path)
 }

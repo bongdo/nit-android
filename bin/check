@@ -7,6 +7,6 @@ export JAVA_HOME="$(bin/java-home)"
 export PATH="$JAVA_HOME/bin:$PATH"
 chmod +x tools/aapt2
 
-./gradlew --console=plain \
+./gradlew --no-daemon --console=plain \
     -Pandroid.aapt2FromMavenOverride="$PWD/tools/aapt2" \
     testDebugUnitTest lintDebug assembleDebug
