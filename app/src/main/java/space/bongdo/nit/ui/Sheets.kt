@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Logout
@@ -168,6 +169,7 @@ fun SessionsSheet(
                             session = session,
                             running = state.runningIds.contains(session.id),
                             selected = state.selected?.id == session.id,
+                            draft = state.drafts.contains(session.id),
                             onClick = { onSelect(session.id) },
                         )
                     }
@@ -189,7 +191,7 @@ fun SessionsSheet(
 }
 
 @Composable
-private fun SessionRow(session: Session, running: Boolean, selected: Boolean, onClick: () -> Unit) {
+private fun SessionRow(session: Session, running: Boolean, selected: Boolean, draft: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -202,7 +204,7 @@ private fun SessionRow(session: Session, running: Boolean, selected: Boolean, on
             Modifier
                 .size(if (running) 7.dp else 4.dp)
                 .clip(CircleShape)
-                .background(if (running) Success else MaterialTheme.colorScheme.outlineVariant),
+                .background(if (running) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant),
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
@@ -220,6 +222,14 @@ private fun SessionRow(session: Session, running: Boolean, selected: Boolean, on
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
+        if (draft) {
+            Icon(
+                Icons.Outlined.Edit,
+                contentDescription = "есть черновик",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(12.dp).padding(end = 4.dp),
+            )
         }
         Text(
             shortTime(session.time.updated.takeIf { it > 0 } ?: session.time.created),
@@ -239,6 +249,7 @@ fun SettingsSheet(
     onPickDirectory: () -> Unit,
     onModel: (ModelRef) -> Unit,
     onAgent: (String) -> Unit,
+    onOpenTheme: () -> Unit,
     onLogout: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -276,6 +287,26 @@ fun SettingsSheet(
                         onModel(ModelRef(id = model.id, providerID = model.providerID))
                         modelsOpen = false
                     }
+                    if (state.selected?.model?.id == model.id && model.variants.isNotEmpty()) {
+                        Column(Modifier.padding(start = 34.dp)) {
+                            ChoiceRow(
+                                title = "Default",
+                                subtitle = "вариант модели",
+                                selected = state.selected?.model?.variant == null,
+                            ) {
+                                onModel(ModelRef(id = model.id, providerID = model.providerID))
+                            }
+                            model.variants.forEach { variant ->
+                                ChoiceRow(
+                                    title = variant.id,
+                                    subtitle = "",
+                                    selected = state.selected?.model?.variant == variant.id,
+                                ) {
+                                    onModel(ModelRef(id = model.id, providerID = model.providerID, variant = variant.id))
+                                }
+                            }
+                        }
+                    }
                 }
             }
             SettingsRow(
@@ -296,9 +327,7 @@ fun SettingsSheet(
                 }
             }
             SettingsRow(Icons.Outlined.Palette, "Тема", themeLabel(state.settings.theme)) {
-                val order = listOf("system", "dark", "light")
-                val next = order[(order.indexOf(state.settings.theme) + 1).mod(order.size)]
-                onTheme(next)
+                onOpenTheme()
             }
             var font by remember(state.settings.fontScale) { mutableStateOf(state.settings.fontScale) }
             Row(
@@ -371,12 +400,6 @@ private fun ChoiceRow(title: String, subtitle: String, selected: Boolean, onClic
             Icon(Icons.Outlined.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
         }
     }
-}
-
-private fun themeLabel(theme: String): String = when (theme) {
-    "dark" -> "тёмная"
-    "light" -> "светлая"
-    else -> "как в системе"
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

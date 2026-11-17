@@ -1,7 +1,7 @@
 package space.bongdo.nit.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,9 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.ExpandLess
-import androidx.compose.material.icons.outlined.ExpandMore
-import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -37,23 +34,28 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import space.bongdo.nit.data.Message
 import space.bongdo.nit.data.Part
 import space.bongdo.nit.data.UserFile
 
 @Composable
-fun MessageItem(message: Message, onOpenHtml: (String) -> Unit) {
+fun MessageItem(
+    message: Message,
+    running: Boolean,
+    onOpenHtml: (String, String) -> Unit,
+    onOpenArtifact: (String, String) -> Unit,
+    onOpenFile: (String, String) -> Unit,
+) {
     when (message.type) {
-        "user" -> UserMessage(message)
-        "assistant" -> AssistantMessage(message, onOpenHtml)
+        "user" -> UserMessage(message, onOpenFile)
+        "assistant" -> AssistantMessage(message, running, onOpenHtml, onOpenArtifact, onOpenFile)
         else -> Unit
     }
 }
 
 @Composable
-private fun UserMessage(message: Message) {
+private fun UserMessage(message: Message, onOpenFile: (String, String) -> Unit) {
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
         Box(
             Modifier
@@ -64,13 +66,11 @@ private fun UserMessage(message: Message) {
         ) {
             Column {
                 message.text?.takeIf { it.isNotBlank() }?.let {
-                    SelectionContainer {
-                        Text(it, style = MaterialTheme.typography.bodyMedium)
-                    }
+                    SelectionContainer { Text(it, style = MaterialTheme.typography.bodyMedium) }
                 }
                 message.files?.forEach { file ->
                     Spacer(Modifier.height(6.dp))
-                    FileRow(file)
+                    FileRow(file, onOpenFile)
                 }
             }
         }
@@ -84,17 +84,21 @@ private fun UserMessage(message: Message) {
 }
 
 @Composable
-private fun FileRow(file: UserFile) {
+private fun FileRow(file: UserFile, onOpenFile: (String, String) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.55f))
+            .clickable {
+                val uri = file.uri ?: return@clickable
+                onOpenFile(uri, file.name ?: "Файл")
+            }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            Icons.Outlined.InsertDriveFile,
+            fileIconFor(file.name),
             contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(15.dp),
@@ -118,11 +122,16 @@ private fun FileRow(file: UserFile) {
 }
 
 @Composable
-private fun AssistantMessage(message: Message, onOpenHtml: (String) -> Unit) {
-    val tools = message.content?.filter { it.type == "tool" } ?: emptyList()
-    val reasoning = message.content?.count { it.type == "reasoning" } ?: 0
-    val textParts = message.content?.filter { it.type == "text" && it.text.isNotBlank() } ?: emptyList()
-    var expanded by remember(message.id) { mutableStateOf(false) }
+private fun AssistantMessage(
+    message: Message,
+    running: Boolean,
+    onOpenHtml: (String, String) -> Unit,
+    onOpenArtifact: (String, String) -> Unit,
+    onOpenFile: (String, String) -> Unit,
+) {
+    val parts = message.content.orEmpty()
+    val questions = parts.filter { it.type == "tool" && it.name == "question" }
+    val textParts = parts.filter { it.type == "text" && it.text.isNotBlank() }
     var copied by remember(message.id) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
@@ -141,11 +150,7 @@ private fun AssistantMessage(message: Message, onOpenHtml: (String) -> Unit) {
 
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "NIT",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            Text("NIT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             if (!message.agent.isNullOrBlank()) {
                 Text(
                     "  ${message.agent.uppercase()}",
@@ -162,38 +167,31 @@ private fun AssistantMessage(message: Message, onOpenHtml: (String) -> Unit) {
         }
         Spacer(Modifier.height(5.dp))
 
-        if (textParts.isEmpty() && message.error == null) {
-            Text(
-                if (tools.isEmpty()) "…" else "готовлю ответ…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        if (textParts.isEmpty() && questions.isEmpty() && message.error == null && running) {
+            TypingLine()
         }
 
         SelectionContainer {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 textParts.forEach { part: Part ->
-                    MarkdownText(part.text, onOpenHtml = onOpenHtml)
+                    MarkdownText(
+                        text = part.text,
+                        onOpenHtml = { source, title -> onOpenHtml(source, title) },
+                        onOpenArtifact = onOpenArtifact,
+                        onOpenFile = onOpenFile,
+                    )
                 }
             }
+        }
+
+        questions.forEach { part ->
+            val answered = questionRecords(part).filter { it.answers.isNotEmpty() }
+            if (answered.isNotEmpty()) QuestionCard(answered)
         }
 
         message.error?.let { error ->
             Spacer(Modifier.height(8.dp))
             ErrorCard(error.message ?: error.name ?: "не получилось")
-        }
-
-        if (tools.isNotEmpty() || reasoning > 0) {
-            Spacer(Modifier.height(7.dp))
-            StepsToggle(
-                tools = tools.size,
-                reasoning = reasoning,
-                expanded = expanded,
-                onToggle = { expanded = !expanded },
-            )
-            if (expanded) {
-                StepsList(tools)
-            }
         }
 
         if (textParts.isNotEmpty()) {
@@ -210,13 +208,20 @@ private fun AssistantMessage(message: Message, onOpenHtml: (String) -> Unit) {
                     if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy,
                     contentDescription = "копировать",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier
-                        .size(15.dp)
-                        .clickableNoRipple(::copy),
+                    modifier = Modifier.size(15.dp).clickableNoRipple(::copy),
                 )
             }
         }
     }
+}
+
+@Composable
+private fun TypingLine() {
+    Text(
+        "печатает…",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable
@@ -237,96 +242,5 @@ private fun ErrorCard(text: String) {
         )
         Spacer(Modifier.width(7.dp))
         Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
-    }
-}
-
-@Composable
-private fun StepsToggle(tools: Int, reasoning: Int, expanded: Boolean, onToggle: () -> Unit) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(7.dp))
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(7.dp))
-            .clickableNoRipple(onToggle)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(14.dp),
-        )
-        Spacer(Modifier.width(4.dp))
-        val pieces = buildList {
-            if (tools > 0) add("$tools ${plural(tools, "шаг", "шага", "шагов")}")
-            if (reasoning > 0) add("размышления")
-        }
-        Text(
-            pieces.joinToString(" · "),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun StepsList(tools: List<Part>) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp)
-            .clip(RoundedCornerShape(9.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-            .padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp),
-    ) {
-        tools.forEach { tool ->
-            val status = tool.state?.status ?: ""
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    tool.name.ifBlank { "tool" },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    when (status) {
-                        "completed" -> "готово"
-                        "error" -> "ошибка"
-                        "running" -> "работает"
-                        else -> "…"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = when (status) {
-                        "error" -> MaterialTheme.colorScheme.error
-                        "completed" -> Success
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                )
-            }
-            val detail = tool.state?.input?.toString()?.takeIf { it.isNotBlank() && it != "null" }
-            if (!detail.isNullOrBlank()) {
-                Text(
-                    detail.take(220),
-                    style = CodeStyle.copy(fontSize = 10.5.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
-fun plural(count: Int, one: String, few: String, many: String): String {
-    val mod100 = count % 100
-    val mod10 = count % 10
-    return when {
-        mod100 in 11..14 -> many
-        mod10 == 1 -> one
-        mod10 in 2..4 -> few
-        else -> many
     }
 }

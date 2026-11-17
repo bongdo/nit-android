@@ -270,6 +270,13 @@ data class Variant(val id: String = "")
 data class UploadedFile(val path: String = "", val name: String = "", val size: Long = 0)
 
 @Serializable
+data class DraftResponse(
+    val text: String = "",
+    val cleared: Boolean = false,
+    val updatedAt: Long = 0,
+)
+
+@Serializable
 data class RemoteUiState(
     val hidden: List<String> = emptyList(),
     val showHidden: Boolean = false,

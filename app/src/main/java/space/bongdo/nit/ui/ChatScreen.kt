@@ -21,7 +21,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.AccountTree
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.FloatingActionButton
@@ -56,7 +58,8 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var pickerCreates by rememberSaveable { mutableStateOf(true) }
-    var html by remember { mutableStateOf<String?>(null) }
+    var themeOpen by rememberSaveable { mutableStateOf(false) }
+    var subagentsOpen by rememberSaveable { mutableStateOf(false) }
     var attachments by remember { mutableStateOf<List<UserFile>>(emptyList()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -69,12 +72,16 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
     val directory = state.selected?.location?.directory?.takeIf { it.isNotBlank() }
         ?: state.settings.lastDirectory
+    val questionForm = state.forms.firstOrNull { it.isQuestionForm() }
+    val otherForms = state.forms.filterNot { it.isQuestionForm() }
     val atBottom by remember {
         derivedStateOf {
             val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
             last >= listState.layoutInfo.totalItemsCount - 2
         }
     }
+
+    LaunchedEffect(state.selected?.id) { attachments = emptyList() }
 
     LaunchedEffect(state.messages.size, state.running) {
         if (state.messages.isNotEmpty() && atBottom) {
@@ -121,6 +128,12 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     viewModel.loadProjects()
                 },
                 onMore = { settingsOpen = true },
+                onTheme = { themeOpen = true },
+                parent = state.selected?.parentID != null,
+                children = state.children.size,
+                runningChildren = state.children.count { it.id in state.runningIds },
+                onParent = viewModel::backToParent,
+                onSubagents = { subagentsOpen = true },
                 onNew = {
                     pickerCreates = true
                     pickerOpen = true
@@ -154,7 +167,14 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                             }
                         }
                         items(state.messages, key = { it.id }) { message ->
-                            MessageItem(message, onOpenHtml = { html = it })
+                            val lastAssistant = state.messages.lastOrNull { it.type == "assistant" }?.id
+                            MessageItem(
+                                message = message,
+                                running = state.running && message.id == lastAssistant,
+                                onOpenHtml = { source, title -> viewModel.openHtml(source, title) },
+                                onOpenArtifact = { path, title -> viewModel.openArtifact(path, title) },
+                                onOpenFile = { path, title -> viewModel.openFile(path, title) },
+                            )
                         }
                     }
                     if (!atBottom && state.messages.isNotEmpty()) {
@@ -171,9 +191,9 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                         }
                     }
                 }
-                if (state.forms.isNotEmpty()) {
+                if (otherForms.isNotEmpty()) {
                     FormSheet(
-                        forms = state.forms,
+                        forms = otherForms,
                         onReply = viewModel::replyForm,
                         onCancel = viewModel::cancelForm,
                         modifier = Modifier.align(Alignment.BottomCenter),
@@ -183,7 +203,16 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             if (state.permissions.isNotEmpty()) {
                 PermissionStrip(state.permissions, viewModel::replyPermission)
             }
+            questionForm?.let {
+                QuestionAnswerBar(
+                    form = it,
+                    onReply = viewModel::replyForm,
+                    onCancel = viewModel::cancelForm,
+                )
+            }
             Composer(
+                value = state.draft,
+                onValueChange = viewModel::setDraft,
                 directory = directory,
                 running = state.running,
                 busy = state.busy,
@@ -201,6 +230,29 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     }
                 },
                 onStop = viewModel::stop,
+                onCommand = { command ->
+                    when (command) {
+                        "new" -> {
+                            pickerCreates = true
+                            pickerOpen = true
+                            viewModel.loadProjects()
+                        }
+                        "dir" -> {
+                            pickerCreates = false
+                            pickerOpen = true
+                            viewModel.loadProjects()
+                        }
+                        "settings" -> settingsOpen = true
+                        "compact" -> viewModel.compactSession()
+                        "revert" -> viewModel.revertLast()
+                        "fork" -> viewModel.forkLastUser()
+                        "fork-here" -> viewModel.forkAt(null)
+                        "retry" -> viewModel.retryLast()
+                        "theme" -> themeOpen = true
+                        "clear" -> viewModel.setDraft("")
+                        "help" -> viewModel.note("Команды: /new /dir /settings /compact /revert /fork /fork-here /retry /theme /clear /help")
+                    }
+                },
             )
         }
     }
@@ -222,6 +274,24 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             },
         )
     }
+    if (subagentsOpen) {
+        SubagentSheet(
+            children = state.children,
+            runningIds = state.runningIds,
+            onDismiss = { subagentsOpen = false },
+            onOpen = { child ->
+                subagentsOpen = false
+                viewModel.openSubagent(child)
+            },
+        )
+    }
+    if (themeOpen) {
+        ThemeSheet(
+            current = state.settings.theme,
+            onDismiss = { themeOpen = false },
+            onPick = viewModel::setTheme,
+        )
+    }
     if (settingsOpen) {
         SettingsSheet(
             state = state,
@@ -236,6 +306,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             },
             onModel = viewModel::switchModel,
             onAgent = viewModel::switchAgent,
+            onOpenTheme = { themeOpen = true },
             onLogout = viewModel::logout,
         )
     }
@@ -251,7 +322,6 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             },
         )
     }
-    html?.let { HtmlPreviewDialog(it, onClose = { html = null }) }
 }
 
 @Composable
@@ -264,13 +334,25 @@ private fun ChatTopBar(
     onMenu: () -> Unit,
     onMore: () -> Unit,
     onNew: () -> Unit,
+    onTheme: () -> Unit,
+    parent: Boolean,
+    children: Int,
+    runningChildren: Int,
+    onParent: () -> Unit,
+    onSubagents: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconButton(onClick = onMenu) {
-            Icon(Icons.Outlined.Menu, contentDescription = "чаты", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (parent) {
+            IconButton(onClick = onParent) {
+                Icon(Icons.Outlined.ArrowBack, contentDescription = "к родителю", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            IconButton(onClick = onMenu) {
+                Icon(Icons.Outlined.Menu, contentDescription = "чаты", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Column(Modifier.weight(1f)) {
             Text(
@@ -319,8 +401,21 @@ private fun ChatTopBar(
                 .padding(end = 2.dp)
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(if (connected) Success else MaterialTheme.colorScheme.outline),
+                .background(if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline),
         )
+        if (children > 0) {
+            Box(contentAlignment = Alignment.Center) {
+                IconButton(onClick = onSubagents) {
+                    Icon(Icons.Outlined.AccountTree, contentDescription = "субагенты", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Text(
+                    if (runningChildren > 0) "$children·$runningChildren" else "$children",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 2.dp),
+                )
+            }
+        }
         IconButton(onClick = onNew) {
             Icon(Icons.Outlined.Add, contentDescription = "новый чат", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }

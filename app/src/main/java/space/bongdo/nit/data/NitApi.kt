@@ -227,6 +227,22 @@ class NitApi(
         Unit
     }
 
+    suspend fun draft(key: String): DraftResponse = withContext(Dispatchers.IO) {
+        val url = httpUrl("/api/ui/drafts").newBuilder().addQueryParameter("key", key).build()
+        val response = call(Request.Builder().url(url).get().build())
+        json.decodeFromString<DraftResponse>(response.body?.string().orEmpty())
+    }
+
+    suspend fun setDraft(key: String, text: String) {
+        post(
+            "/api/ui/drafts",
+            buildJsonObject {
+                put("key", key)
+                put("text", text)
+            },
+        )
+    }
+
     suspend fun hiddenSessions(): Set<String> = withContext(Dispatchers.IO) {
         val response = call(Request.Builder().url(api("/api/ui")).get().build())
         runCatching {
@@ -258,6 +274,50 @@ class NitApi(
     suspend fun agents(): List<Agent> = withContext(Dispatchers.IO) {
         val response = call(Request.Builder().url(api("/api/agents")).get().build())
         parseDataList<Agent>(response.body?.string().orEmpty())
+    }
+
+    suspend fun children(id: String): List<Session> = withContext(Dispatchers.IO) {
+        val response = call(Request.Builder().url(api("/api/sessions/$id/children")).get().build())
+        json.decodeFromString<SessionList>(response.body?.string().orEmpty()).data
+    }
+
+    suspend fun compact(id: String) = post("/api/sessions/$id/compact")
+
+    suspend fun revert(id: String, messageID: String) = post(
+        "/api/sessions/$id/revert",
+        buildJsonObject { put("messageID", messageID) },
+    )
+
+    suspend fun fork(id: String, before: String? = null): Session = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            if (!before.isNullOrBlank()) put("before", before)
+        }
+        val response = call(
+            Request.Builder()
+                .url(api("/api/sessions/$id/fork"))
+                .post(body.toString().toRequestBody(JSON))
+                .build(),
+        )
+        json.decodeFromString<SessionEnvelope>(response.body?.string().orEmpty()).data
+    }
+
+    suspend fun artifact(sessionID: String, path: String): String = withContext(Dispatchers.IO) {
+        val url = httpUrl("/api/artifact").newBuilder()
+            .addQueryParameter("session", sessionID)
+            .addQueryParameter("path", path)
+            .build()
+        val response = call(Request.Builder().url(url).get().build())
+        json.decodeFromString<ArtifactResponse>(response.body?.string().orEmpty()).html
+    }
+
+    suspend fun viewBytes(path: String): ByteArray = withContext(Dispatchers.IO) {
+        val url = httpUrl("/api/view").newBuilder().addQueryParameter("path", path).build()
+        call(Request.Builder().url(url).get().build()).use { it.body?.bytes() ?: ByteArray(0) }
+    }
+
+    suspend fun uploadedBytes(path: String): ByteArray = withContext(Dispatchers.IO) {
+        val url = httpUrl("/api/file").newBuilder().addQueryParameter("path", path).build()
+        call(Request.Builder().url(url).get().build()).use { it.body?.bytes() ?: ByteArray(0) }
     }
 
     suspend fun switchModel(id: String, model: ModelRef) = post(
@@ -339,3 +399,6 @@ class NitApi(
 
 @kotlinx.serialization.Serializable
 private data class SessionEnvelope(val data: Session)
+
+@kotlinx.serialization.Serializable
+private data class ArtifactResponse(val path: String = "", val html: String = "")

@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonObject
 import space.bongdo.nit.data.Agent
 import space.bongdo.nit.data.ApiException
 import space.bongdo.nit.data.AppSettings
+import space.bongdo.nit.data.DraftStore
 import space.bongdo.nit.data.EventStream
 import space.bongdo.nit.data.FolderListing
 import space.bongdo.nit.data.FormInfo
@@ -36,7 +37,12 @@ import space.bongdo.nit.data.StreamEvent
 import space.bongdo.nit.data.StreamReducer
 import space.bongdo.nit.data.UnauthorizedException
 import space.bongdo.nit.data.UserFile
+import space.bongdo.nit.PreviewActivity
 import space.bongdo.nit.data.parseServer
+import space.bongdo.nit.ui.PreviewKind
+import space.bongdo.nit.ui.fileKind
+import space.bongdo.nit.ui.mimeFor
+import space.bongdo.nit.ui.resolvePath
 import java.io.File
 
 enum class Phase { Loading, Login, Ready }
@@ -64,11 +70,16 @@ data class UiState(
     val search: String = "",
     val searching: Boolean = false,
     val hidden: Set<String> = emptySet(),
+    val children: List<Session> = emptyList(),
+    val draft: String = "",
+    val draftKey: String = "",
+    val drafts: Set<String> = emptySet(),
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsStore = SettingsStore(application)
     private val secureStore = SecureStore(application)
+    private val draftStore = DraftStore(application)
     private val api = NitApi(secureStore.cookies)
 
     private val _state = MutableStateFlow(UiState())
@@ -77,8 +88,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var streamJob: Job? = null
     private var currentServer: ServerAddress? = null
     private var refreshJob: Job? = null
+    private var draftJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            draftStore.keys.collect { keys -> _state.update { it.copy(drafts = keys) } }
+        }
         viewModelScope.launch {
             val settings = settingsStore.flow.first()
             _state.update { it.copy(settings = settings) }
@@ -102,6 +117,71 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissBanner() = _state.update { it.copy(banner = null) }
+
+    fun note(message: String) = _state.update { it.copy(banner = message) }
+
+    fun openHtml(source: String, title: String) {
+        viewModelScope.launch {
+            runCatching {
+                val file = cacheFile(title, "html")
+                file.writeText(source)
+                launchPreview(title, PreviewKind.HTML, file, "text/html")
+            }.onFailure { error -> _state.update { it.copy(banner = error.message) } }
+        }
+    }
+
+    fun openArtifact(path: String, title: String) {
+        val session = _state.value.selected?.id ?: return
+        viewModelScope.launch {
+            runCatching {
+                val html = api.artifact(session, path)
+                val file = cacheFile(title.ifBlank { path }, "html")
+                file.writeText(html)
+                launchPreview(title.ifBlank { path }, PreviewKind.HTML, file, "text/html")
+            }.onFailure { error -> _state.update { it.copy(banner = error.message) } }
+        }
+    }
+
+    fun openFile(rawPath: String, title: String) {
+        viewModelScope.launch {
+            runCatching {
+                val path = normalizePreviewPath(rawPath)
+                val name = title.ifBlank { path.substringAfterLast('/') }
+                val bytes = if (path.startsWith("/tmp/nit-gui-")) api.uploadedBytes(path) else api.viewBytes(path)
+                val kind = fileKind(name, mimeFor(name))
+                val file = cacheFile(name, name.substringAfterLast('.', ""))
+                file.writeBytes(bytes)
+                launchPreview(name, kind, file, mimeFor(name))
+            }.onFailure { error -> _state.update { it.copy(banner = error.message) } }
+        }
+    }
+
+    private fun normalizePreviewPath(raw: String): String {
+        val value = raw.trim()
+        if (value.contains("/api/file?") || value.contains("/api/view?")) {
+            return runCatching {
+                val uri = java.net.URI(value)
+                val query = uri.query ?: uri.rawQuery
+                query?.split('&')
+                    ?.firstOrNull { it.startsWith("path=") }
+                    ?.substringAfter('=')
+                    ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+            }.getOrNull() ?: value
+        }
+        if (value.startsWith("file://")) return java.net.URI(value).path
+        if (value.startsWith("file:")) return value.removePrefix("file:")
+        return resolvePath(value, _state.value.selected?.location?.directory)
+    }
+
+    private fun cacheFile(name: String, ext: String): File {
+        val safe = name.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifBlank { "preview" }
+        val suffix = ext.takeIf { it.isNotBlank() }?.let { ".$it" } ?: ""
+        return File(getApplication<Application>().cacheDir, "preview-${System.nanoTime()}-$safe$suffix")
+    }
+
+    private fun launchPreview(title: String, kind: String, file: File, mime: String?) {
+        PreviewActivity.open(getApplication(), title, kind, file, mime, _state.value.settings.theme)
+    }
 
     fun login(user: String, password: String, code: String, server: String) {
         viewModelScope.launch {
@@ -131,7 +211,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { api.logout() }
             secureStore.cookies.clear()
-            _state.value = UiState(phase = Phase.Login, settings = _state.value.settings)
+            draftJob?.cancel()
+            _state.value = UiState(phase = Phase.Login, settings = _state.value.settings, drafts = _state.value.drafts)
         }
     }
 
@@ -145,6 +226,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val settings = _state.value.settings
         if (settings.lastSession.isNotBlank()) {
             runCatching { openSession(settings.lastSession) }
+        } else {
+            switchDraft("new:${settings.lastDirectory}")
         }
     }
 
@@ -206,6 +289,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     viewModelScope.launch {
                         reloadMessages(sessionID)
                         loadPermissionsAndForms(sessionID)
+                        runCatching { api.children(sessionID) }.onSuccess { children ->
+                            _state.update { it.copy(children = children) }
+                        }
                     }
                 }
                 scheduleSessionsRefresh()
@@ -290,9 +376,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value.sessions.firstOrNull { it.id == id }
             } ?: return@launch
             _state.update { it.copy(selected = session, messages = emptyList(), previous = null) }
+            switchDraft(id)
             settingsStore.update { it.copy(lastSession = id) }
             reloadMessages(id)
             loadPermissionsAndForms(id)
+            launch { runCatching { api.children(id) }.onSuccess { children -> _state.update { it.copy(children = children) } } }
             launch { runCatching { api.models(session.location.directory) }.onSuccess { models -> _state.update { it.copy(models = models) } } }
             launch { runCatching { api.agents() }.onSuccess { agents -> _state.update { it.copy(agents = agents) } } }
         }
@@ -344,6 +432,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         viewModelScope.launch {
+            val sentKey = _state.value.draftKey
             _state.update { it.copy(busy = true, banner = null) }
             var localID: String? = null
             try {
@@ -386,6 +475,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 _state.update { it.copy(busy = false) }
+                draftJob?.cancel()
+                draftStore.set(sentKey, "")
+                runCatching { api.setDraft(sentKey, "") }
+                _state.update { it.copy(draft = "") }
+                if (_state.value.draftKey != session.id && _state.value.selected?.id == session.id) {
+                    switchDraft(session.id)
+                }
                 onResult(true)
             } catch (error: Exception) {
                 val failed = localID
@@ -427,9 +523,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             messages = emptyList(),
                             previous = null,
                             busy = false,
+                            children = emptyList(),
                             sessions = listOf(session) + it.sessions.filter { existing -> existing.id != session.id },
                         )
                     }
+                    switchDraft(session.id)
                     loadPermissionsAndForms(session.id)
                 }
                 .onFailure { error ->
@@ -442,6 +540,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             settingsStore.update { it.copy(lastDirectory = directory) }
             _state.update { it.copy(settings = it.settings.copy(lastDirectory = directory)) }
+            if (_state.value.selected == null) switchDraft("new:$directory")
         }
     }
 
@@ -456,6 +555,113 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             settingsStore.update { it.copy(fontScale = scale) }
             _state.update { it.copy(settings = it.settings.copy(fontScale = scale)) }
+        }
+    }
+
+    fun compactSession() {
+        val id = _state.value.selected?.id ?: return
+        viewModelScope.launch {
+            runCatching { api.compact(id) }
+                .onSuccess { refreshSessions() }
+                .onFailure { error -> _state.update { it.copy(banner = error.message) } }
+        }
+    }
+
+    fun revertLast() {
+        val lastUser = _state.value.messages.lastOrNull { it.type == "user" } ?: return
+        if (_state.value.running) {
+            _state.update { it.copy(banner = "Сначала остановите ход") }
+            return
+        }
+        val id = _state.value.selected?.id ?: return
+        viewModelScope.launch {
+            runCatching { api.revert(id, lastUser.id) }
+                .onSuccess {
+                    _state.update { current ->
+                        val index = current.messages.indexOfFirst { it.id == lastUser.id }
+                        current.copy(messages = if (index >= 0) current.messages.take(index) else current.messages)
+                    }
+                    setDraft(lastUser.text.orEmpty())
+                    reloadMessages(id)
+                }
+                .onFailure { error -> _state.update { it.copy(banner = error.message) } }
+        }
+    }
+
+    fun forkAt(before: String? = null) {
+        val id = _state.value.selected?.id ?: return
+        viewModelScope.launch {
+            runCatching { api.fork(id, before) }
+                .onSuccess { forked ->
+                    _state.update {
+                        it.copy(
+                            selected = forked,
+                            messages = emptyList(),
+                            previous = null,
+                            children = emptyList(),
+                            sessions = listOf(forked) + it.sessions.filter { existing -> existing.id != forked.id },
+                        )
+                    }
+                    switchDraft(forked.id)
+                    reloadMessages(forked.id)
+                    loadPermissionsAndForms(forked.id)
+                }
+                .onFailure { error -> _state.update { it.copy(banner = error.message) } }
+        }
+    }
+
+    fun forkLastUser() {
+        val lastUser = _state.value.messages.lastOrNull { it.type == "user" } ?: return
+        forkAt(lastUser.id)
+    }
+
+    fun retryLast() {
+        val lastUser = _state.value.messages.lastOrNull { it.type == "user" } ?: return
+        if (_state.value.running) {
+            _state.update { it.copy(banner = "Сначала остановите ход") }
+            return
+        }
+        send(lastUser.text.orEmpty(), emptyList())
+    }
+
+    fun openSubagent(session: Session) {
+        openSession(session.id)
+    }
+
+    fun backToParent() {
+        val parent = _state.value.selected?.parentID ?: return
+        openSession(parent)
+    }
+
+    fun setDraft(text: String) {
+        val key = _state.value.draftKey
+        _state.update { it.copy(draft = text) }
+        if (key.isBlank()) return
+        draftJob?.cancel()
+        draftJob = viewModelScope.launch {
+            delay(350)
+            draftStore.set(key, text)
+            runCatching { api.setDraft(key, text) }
+        }
+    }
+
+    private fun switchDraft(key: String) {
+        val oldKey = _state.value.draftKey
+        val oldText = _state.value.draft
+        draftJob?.cancel()
+        _state.update { it.copy(draftKey = key, draft = "") }
+        viewModelScope.launch {
+            if (oldKey.isNotBlank() && oldKey != key) draftStore.set(oldKey, oldText)
+            var text = draftStore.get(key)
+            if (text.isEmpty()) {
+                runCatching { api.draft(key) }.getOrNull()?.takeIf { !it.cleared && it.text.isNotEmpty() }?.let {
+                    text = it.text
+                    draftStore.set(key, text)
+                }
+            }
+            if (_state.value.draftKey == key && _state.value.draft.isEmpty()) {
+                _state.update { it.copy(draft = text) }
+            }
         }
     }
 

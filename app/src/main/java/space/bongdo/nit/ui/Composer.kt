@@ -2,6 +2,7 @@ package space.bongdo.nit.ui
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AttachFile
@@ -33,18 +36,22 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import space.bongdo.nit.data.UserFile
 
 @Composable
 fun Composer(
+    value: String,
+    onValueChange: (String) -> Unit,
     directory: String,
     running: Boolean,
     busy: Boolean,
@@ -53,12 +60,28 @@ fun Composer(
     onRemove: (UserFile) -> Unit,
     onSend: (String, (Boolean) -> Unit) -> Unit,
     onStop: () -> Unit,
+    onCommand: (String) -> Unit,
 ) {
-    var text by rememberSaveable(directory) { mutableStateOf("") }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) onAttach(uri, null)
+    var attachOpen by rememberSaveable { mutableStateOf(false) }
+    var commandDismissed by rememberSaveable { mutableStateOf(false) }
+    val photo = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) onAttach(uri, null) }
+    val document = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) onAttach(uri, null) }
+    val file = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri -> if (uri != null) onAttach(uri, null) }
+
+    val canSend = (value.isNotBlank() || attachments.isNotEmpty()) && !busy && !running
+    val query = if (value.startsWith("/") && !value.contains("\n")) value.drop(1) else null
+    val matches = if (query != null && !query.contains(" ")) {
+        SLASH_COMMANDS.filter { it.id.startsWith(query.lowercase(), ignoreCase = true) }
+    } else {
+        emptyList()
     }
-    val canSend = (text.isNotBlank() || attachments.isNotEmpty()) && !busy && !running
+    val paletteOpen = matches.isNotEmpty() && !commandDismissed
 
     Surface(
         color = MaterialTheme.colorScheme.background,
@@ -66,21 +89,38 @@ fun Composer(
         modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding(),
     ) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            if (paletteOpen) {
+                SlashPalette(
+                    commands = matches,
+                    onPick = { command ->
+                        onValueChange("")
+                        commandDismissed = true
+                        onCommand(command.id)
+                    },
+                )
+            }
             if (attachments.isNotEmpty()) {
                 Row(
                     modifier = Modifier.padding(bottom = 5.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    attachments.forEach { file ->
+                    attachments.forEach { item ->
                         Row(
                             Modifier
-                                .clip(RoundedCornerShape(7.dp))
+                                .clip(RoundedCornerShape(8.dp))
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(start = 7.dp, top = 4.dp, bottom = 4.dp),
+                                .padding(start = 7.dp, top = 5.dp, bottom = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            Icon(
+                                fileIconFor(item.name),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(5.dp))
                             Text(
-                                file.name ?: "файл",
+                                item.name ?: "файл",
                                 style = MaterialTheme.typography.labelSmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -93,7 +133,7 @@ fun Composer(
                                 modifier = Modifier
                                     .padding(horizontal = 4.dp)
                                     .size(13.dp)
-                                    .clickableNoRipple { onRemove(file) },
+                                    .clickableNoRipple { onRemove(item) },
                             )
                         }
                     }
@@ -107,7 +147,7 @@ fun Composer(
                     .background(MaterialTheme.colorScheme.surface),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                IconButton(onClick = { picker.launch("*/*") }, modifier = Modifier.size(44.dp)) {
+                IconButton(onClick = { attachOpen = true }, modifier = Modifier.size(44.dp)) {
                     Icon(
                         Icons.Outlined.AttachFile,
                         contentDescription = "прикрепить",
@@ -117,16 +157,21 @@ fun Composer(
                 }
                 Box(Modifier.weight(1f).padding(vertical = 11.dp, horizontal = 2.dp)) {
                     BasicTextField(
-                        value = text,
-                        onValueChange = { text = it },
+                        value = value,
+                        onValueChange = {
+                            onValueChange(it)
+                            commandDismissed = false
+                        },
                         textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         maxLines = 6,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                        keyboardActions = KeyboardActions(),
                         modifier = Modifier.fillMaxWidth().heightIn(min = 20.dp, max = 150.dp),
                     )
-                    if (text.isEmpty()) {
+                    if (value.isEmpty()) {
                         Text(
-                            if (directory.isBlank()) "Выберите папку в меню…" else "Спроси что угодно…",
+                            if (directory.isBlank()) "Выберите папку в меню…" else "Спроси что угодно… / команды",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                         )
@@ -145,7 +190,7 @@ fun Composer(
                 IconButton(
                     onClick = {
                         if (!canSend) return@IconButton
-                        onSend(text) { sent -> if (sent) text = "" }
+                        onSend(value) { sent -> if (sent) onValueChange("") }
                     },
                     enabled = canSend,
                     modifier = Modifier.padding(end = 5.dp, bottom = 5.dp).size(34.dp),
@@ -171,5 +216,31 @@ fun Composer(
                 }
             }
         }
+    }
+
+    if (attachOpen) {
+        AttachSheet(
+            onDismiss = { attachOpen = false },
+            onPhoto = {
+                attachOpen = false
+                photo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onDocument = {
+                attachOpen = false
+                document.launch(
+                    arrayOf(
+                        "application/pdf",
+                        "text/plain",
+                        "text/markdown",
+                        "application/msword",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ),
+                )
+            },
+            onFile = {
+                attachOpen = false
+                file.launch("*/*")
+            },
+        )
     }
 }

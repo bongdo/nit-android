@@ -65,18 +65,40 @@ import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.intellij.markdown.parser.MarkdownParser
 
 private const val LinkTag = "markdown-link"
+private const val FileTag = "markdown-file"
+
+data class MarkdownActions(
+    val onOpenHtml: (String, String) -> Unit = { _, _ -> },
+    val onOpenArtifact: (String, String) -> Unit = { _, _ -> },
+    val onOpenFile: (String, String) -> Unit = { _, _ -> },
+    val directory: String? = null,
+)
+
+val LocalMarkdownActions = androidx.compose.runtime.staticCompositionLocalOf { MarkdownActions() }
 
 @Composable
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
-    onOpenHtml: (String) -> Unit = {},
+    onOpenHtml: (String, String) -> Unit = { _, _ -> },
+    onOpenArtifact: (String, String) -> Unit = { _, _ -> },
+    onOpenFile: (String, String) -> Unit = { _, _ -> },
+    directory: String? = null,
 ) {
-    val root = remember(text) {
-        MarkdownParser(GFMFlavourDescriptor(), false).buildMarkdownTreeFromString(text)
-    }
-    Column(modifier) {
-        root.children.forEach { MarkdownBlock(it, text, 0, onOpenHtml) }
+    val actions = MarkdownActions(onOpenHtml, onOpenArtifact, onOpenFile, directory)
+    val segments = remember(text) { richSegments(text) }
+    androidx.compose.runtime.CompositionLocalProvider(LocalMarkdownActions provides actions) {
+        Column(modifier) {
+            segments.forEach { segment ->
+                if (segment.text.isNotBlank()) {
+                    val root = remember(segment.text) {
+                        MarkdownParser(GFMFlavourDescriptor(), false).buildMarkdownTreeFromString(segment.text)
+                    }
+                    root.children.forEach { MarkdownBlock(it, segment.text, 0) }
+                }
+                segment.artifacts.forEach { artifact -> HtmlArtifactCard(artifact) }
+            }
+        }
     }
 }
 
@@ -113,7 +135,6 @@ private fun MarkdownBlock(
     node: ASTNode,
     source: String,
     depth: Int,
-    onOpenHtml: (String) -> Unit,
 ) {
     when (node.type) {
         MarkdownElementTypes.ATX_1, MarkdownElementTypes.SETEXT_1 ->
@@ -135,8 +156,8 @@ private fun MarkdownBlock(
             InlineMarkdown(node, source)
         }
         MarkdownElementTypes.UNORDERED_LIST, MarkdownElementTypes.ORDERED_LIST ->
-            MarkdownList(node, source, depth, onOpenHtml)
-        MarkdownElementTypes.BLOCK_QUOTE -> MarkdownQuote(node, source, depth, onOpenHtml)
+            MarkdownList(node, source, depth)
+        MarkdownElementTypes.BLOCK_QUOTE -> MarkdownQuote(node, source, depth)
         MarkdownTokenTypes.HORIZONTAL_RULE -> HorizontalDivider(
             modifier = Modifier.padding(vertical = 10.dp),
             color = MaterialTheme.colorScheme.outlineVariant,
@@ -144,18 +165,21 @@ private fun MarkdownBlock(
         MarkdownElementTypes.CODE_FENCE -> {
             val code = fencedCode(node, source)
             val language = fenceLanguage(node, source)
-            if (isHtmlFence(language)) HtmlFenceCard(code, onOpenHtml) else CodeBlock(code, language)
+            if (isHtmlFence(language) || (language.isBlank() && isPureHtml(code))) HtmlFenceCard(code, language) else CodeBlock(code, language)
         }
         MarkdownElementTypes.CODE_BLOCK -> CodeBlock(indentedCode(node, source), null)
         GFMElementTypes.TABLE -> MarkdownTable(node, source)
-        MarkdownElementTypes.HTML_BLOCK -> Text(
-            text = node.getTextInNode(source).toString().trim(),
-            style = CodeStyle,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        )
+        MarkdownElementTypes.HTML_BLOCK -> {
+            val html = node.getTextInNode(source).toString().trim()
+            if (looksLikeHtml(html)) HtmlArtifactCard(HtmlArtifact(source = html)) else Text(
+                text = html,
+                style = CodeStyle,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            )
+        }
         MarkdownElementTypes.LINK_DEFINITION -> Unit
-        else -> node.children.forEach { MarkdownBlock(it, source, depth, onOpenHtml) }
+        else -> node.children.forEach { MarkdownBlock(it, source, depth) }
     }
 }
 
@@ -171,7 +195,6 @@ private fun MarkdownList(
     node: ASTNode,
     source: String,
     depth: Int,
-    onOpenHtml: (String) -> Unit,
 ) {
     val ordered = node.type == MarkdownElementTypes.ORDERED_LIST
     node.children.filter { it.type == MarkdownElementTypes.LIST_ITEM }
@@ -205,8 +228,8 @@ private fun MarkdownList(
                             MarkdownTokenTypes.WHITE_SPACE -> Unit
                             MarkdownElementTypes.UNORDERED_LIST,
                             MarkdownElementTypes.ORDERED_LIST ->
-                                MarkdownList(child, source, (depth + 1).coerceAtMost(3), onOpenHtml)
-                            else -> MarkdownBlock(child, source, depth + 1, onOpenHtml)
+                                MarkdownList(child, source, (depth + 1).coerceAtMost(3))
+                            else -> MarkdownBlock(child, source, depth + 1)
                         }
                     }
                 }
@@ -219,7 +242,6 @@ private fun MarkdownQuote(
     node: ASTNode,
     source: String,
     depth: Int,
-    onOpenHtml: (String) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).height(IntrinsicSize.Min)) {
         Box(
@@ -231,7 +253,7 @@ private fun MarkdownQuote(
         Column(Modifier.weight(1f).padding(start = 10.dp)) {
             node.children.forEach { child ->
                 if (child.type != MarkdownTokenTypes.BLOCK_QUOTE) {
-                    MarkdownBlock(child, source, depth, onOpenHtml)
+                    MarkdownBlock(child, source, depth)
                 }
             }
         }
@@ -290,6 +312,7 @@ private fun MarkdownTable(node: ASTNode, source: String) {
 @Composable
 private fun CodeBlock(code: String, language: String?) {
     val clipboard = LocalClipboardManager.current
+    val palette = LocalSyntaxPalette.current
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -335,8 +358,21 @@ private fun CodeBlock(code: String, language: String?) {
                 .horizontalScroll(rememberScrollState())
                 .padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
         ) {
+            val highlighted = remember(code, palette) {
+                buildAnnotatedString {
+                    var cursor = 0
+                    for (span in tokenizeSyntax(code)) {
+                        if (span.start > cursor) append(code.substring(cursor, span.start))
+                        withStyle(SpanStyle(color = palette.colorFor(span.kind))) {
+                            append(code.substring(span.start, span.end))
+                        }
+                        cursor = span.end
+                    }
+                    if (cursor < code.length) append(code.substring(cursor))
+                }
+            }
             Text(
-                text = code,
+                text = highlighted,
                 style = CodeStyle,
                 color = MaterialTheme.colorScheme.onSurface,
                 softWrap = false,
@@ -346,29 +382,71 @@ private fun CodeBlock(code: String, language: String?) {
 }
 
 @Composable
-private fun HtmlFenceCard(content: String, onOpenHtml: (String) -> Unit) {
+private fun HtmlFenceCard(content: String, language: String?) {
+    val actions = LocalMarkdownActions.current
+    HtmlPreviewBlock(
+        title = "HTML-превью",
+        source = content,
+        onOpen = { actions.onOpenHtml(content, language?.ifBlank { null } ?: "HTML") },
+    )
+}
+
+@Composable
+private fun HtmlPreviewBlock(title: String, source: String, onOpen: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(7.dp))
+            Text(title, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+            Text("открыть окном", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        }
+        HtmlView(
+            html = source,
+            modifier = Modifier.fillMaxWidth().height(220.dp),
+            dark = LocalIsDark.current,
+        )
+    }
+}
+
+@Composable
+private fun HtmlArtifactCard(artifact: HtmlArtifact) {
+    val actions = LocalMarkdownActions.current
+    val title = artifact.title.ifBlank {
+        artifact.path.substringAfterLast('/').ifBlank { "HTML-превью" }
+    }
+    if (artifact.source.isNotBlank()) {
+        HtmlPreviewBlock(title = title, source = artifact.source, onOpen = { actions.onOpenHtml(artifact.source, title) })
+        return
+    }
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
         shape = RoundedCornerShape(10.dp),
         modifier = Modifier.fillMaxWidth()
             .padding(vertical = 6.dp)
-            .clickable { onOpenHtml(content) },
+            .clickable {
+                if (artifact.path.isNotBlank()) actions.onOpenArtifact(artifact.path, title)
+                else actions.onOpenHtml(artifact.source, title)
+            },
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Outlined.Language,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
-            )
+            Icon(Icons.Outlined.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text("HTML-превью", style = MaterialTheme.typography.titleMedium)
+                Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "открыть на весь экран",
+                    "HTML-страница · открыть в новом окне",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -386,11 +464,13 @@ private fun InlineMarkdown(
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val codeBackground = MaterialTheme.colorScheme.surfaceVariant
-    val annotated = remember(node, source, accent, codeBackground) {
-        buildAnnotatedString { appendInline(node, source, accent, codeBackground) }
+    val directory = LocalMarkdownActions.current.directory
+    val annotated = remember(node, source, accent, codeBackground, directory) {
+        buildAnnotatedString { appendInline(node, source, accent, codeBackground, directory) }
     }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val uriHandler = LocalUriHandler.current
+    val actions = LocalMarkdownActions.current
     Text(
         text = annotated,
         style = style,
@@ -400,6 +480,10 @@ private fun InlineMarkdown(
             detectTapGestures { position ->
                 val result = layout ?: return@detectTapGestures
                 val offset = result.getOffsetForPosition(position)
+                annotated.getStringAnnotations(FileTag, offset, offset).firstOrNull()?.let { file ->
+                    actions.onOpenFile(file.item, file.item.substringAfterLast('/'))
+                    return@detectTapGestures
+                }
                 annotated.getStringAnnotations(LinkTag, offset, offset).firstOrNull()?.let { link ->
                     runCatching { uriHandler.openUri(link.item) }
                 }
@@ -413,6 +497,7 @@ private fun AnnotatedString.Builder.appendInline(
     source: String,
     accent: Color,
     codeBackground: Color,
+    directory: String?,
 ) {
     when (node.type) {
         MarkdownTokenTypes.TEXT, MarkdownTokenTypes.WHITE_SPACE ->
@@ -421,17 +506,17 @@ private fun AnnotatedString.Builder.appendInline(
         MarkdownTokenTypes.HARD_LINE_BREAK -> append('\n')
         MarkdownElementTypes.EMPH -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
             node.children.forEach {
-                if (it.type != MarkdownTokenTypes.EMPH) appendInline(it, source, accent, codeBackground)
+                if (it.type != MarkdownTokenTypes.EMPH) appendInline(it, source, accent, codeBackground, directory)
             }
         }
         MarkdownElementTypes.STRONG -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
             node.children.forEach {
-                if (it.type != MarkdownTokenTypes.EMPH) appendInline(it, source, accent, codeBackground)
+                if (it.type != MarkdownTokenTypes.EMPH) appendInline(it, source, accent, codeBackground, directory)
             }
         }
         GFMElementTypes.STRIKETHROUGH -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
             node.children.forEach {
-                if (it.type != GFMTokenTypes.TILDE) appendInline(it, source, accent, codeBackground)
+                if (it.type != GFMTokenTypes.TILDE) appendInline(it, source, accent, codeBackground, directory)
             }
         }
         MarkdownElementTypes.CODE_SPAN -> {
@@ -441,16 +526,34 @@ private fun AnnotatedString.Builder.appendInline(
             if (body.length > 2 && body.startsWith(' ') && body.endsWith(' ') && body.isNotBlank()) {
                 body = body.substring(1, body.length - 1)
             }
-            withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)) {
-                append(body)
+            val target = fileTarget(body)
+            if (target != null) {
+                val resolved = resolvePath(target.path, directory)
+                pushStringAnnotation(FileTag, resolved)
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground, color = accent, textDecoration = TextDecoration.Underline)) {
+                    append(body)
+                }
+                pop()
+            } else {
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)) {
+                    append(body)
+                }
             }
         }
         MarkdownElementTypes.INLINE_LINK -> {
             val destination = node.findChildOfType(MarkdownElementTypes.LINK_DESTINATION)
                 ?.getTextInNode(source)?.toString()?.trim()?.trim('<', '>')
                 ?.let(::openable)
-            appendLink(destination, accent) {
-                appendLinkText(node, source, accent, codeBackground)
+            val rawDestination = node.findChildOfType(MarkdownElementTypes.LINK_DESTINATION)
+                ?.getTextInNode(source)?.toString()?.trim()?.trim('<', '>').orEmpty()
+            if (rawDestination.contains("/api/file?") || rawDestination.contains("/api/view?") || rawDestination.startsWith("file:")) {
+                appendFileLink(rawDestination, accent) {
+                    appendLinkText(node, source, accent, codeBackground, directory)
+                }
+            } else {
+                appendLink(destination, accent) {
+                    appendLinkText(node, source, accent, codeBackground, directory)
+                }
             }
         }
         MarkdownElementTypes.AUTOLINK -> {
@@ -477,8 +580,8 @@ private fun AnnotatedString.Builder.appendInline(
         // shortcut: reference-style links stay plain text, add a link-definition map when needed
         MarkdownElementTypes.FULL_REFERENCE_LINK,
         MarkdownElementTypes.SHORT_REFERENCE_LINK ->
-            node.children.forEach { appendInline(it, source, accent, codeBackground) }
-        else -> node.children.forEach { appendInline(it, source, accent, codeBackground) }
+            node.children.forEach { appendInline(it, source, accent, codeBackground, directory) }
+        else -> node.children.forEach { appendInline(it, source, accent, codeBackground, directory) }
     }
 }
 
@@ -487,9 +590,18 @@ private fun AnnotatedString.Builder.appendLinkText(
     source: String,
     accent: Color,
     codeBackground: Color,
+    directory: String?,
 ) {
     node.children.filter { it.type == MarkdownElementTypes.LINK_TEXT }
-        .forEach { appendInline(it, source, accent, codeBackground) }
+        .forEach { appendInline(it, source, accent, codeBackground, directory) }
+}
+
+private fun AnnotatedString.Builder.appendFileLink(destination: String, accent: Color, content: () -> Unit) {
+    pushStringAnnotation(FileTag, destination)
+    pushStyle(SpanStyle(color = accent, textDecoration = TextDecoration.Underline))
+    content()
+    pop()
+    pop()
 }
 
 private fun AnnotatedString.Builder.appendLink(destination: String?, accent: Color, content: () -> Unit) {
@@ -503,6 +615,7 @@ private fun AnnotatedString.Builder.appendLink(destination: String?, accent: Col
     pop()
     pop()
 }
+
 
 private fun openable(url: String?): String? {
     val value = url?.trim().orEmpty()

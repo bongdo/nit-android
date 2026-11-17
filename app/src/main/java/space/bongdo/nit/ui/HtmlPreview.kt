@@ -29,7 +29,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun HtmlPreviewDialog(html: String, onClose: () -> Unit) {
+fun HtmlPreviewDialog(html: String, title: String = "HTML-превью", onClose: () -> Unit) {
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -43,7 +43,7 @@ fun HtmlPreviewDialog(html: String, onClose: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "HTML-превью",
+                        title,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f).padding(start = 8.dp),
                     )
@@ -59,7 +59,11 @@ fun HtmlPreviewDialog(html: String, onClose: () -> Unit) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun HtmlView(html: String, modifier: Modifier = Modifier) {
+fun HtmlView(
+    html: String,
+    modifier: Modifier = Modifier,
+    dark: Boolean = androidx.compose.foundation.isSystemInDarkTheme(),
+) {
     AndroidView(
         modifier = modifier,
         factory = { context ->
@@ -77,7 +81,7 @@ fun HtmlView(html: String, modifier: Modifier = Modifier) {
                 }
                 loadDataWithBaseURL(
                     null,
-                    wrapHtml(html),
+                    wrapHtml(html, dark),
                     "text/html",
                     "utf-8",
                     null,
@@ -87,17 +91,25 @@ fun HtmlView(html: String, modifier: Modifier = Modifier) {
     )
 }
 
-private fun wrapHtml(html: String): String {
-    if (html.contains("<html", ignoreCase = true)) return html
+private fun wrapHtml(html: String, dark: Boolean): String {
+    val background = if (dark) "#16171b" else "#f7f6f3"
+    val foreground = if (dark) "#e9e7e2" else "#1b1c1f"
+    val border = if (dark) "#343843" else "#cfcac1"
+    if (html.contains("<html", ignoreCase = true)) {
+        val style = """<style>:root { color-scheme: ${if (dark) "dark" else "light"}; } html, body { background: $background; color: $foreground; }</style>"""
+        val head = Regex("<head(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE).find(html)
+        return if (head != null) html.substring(0, head.range.last + 1) + style + html.substring(head.range.last + 1) else style + html
+    }
     return """
         <!doctype html>
         <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
         <style>
-          :root { color-scheme: dark light; }
-          html, body { margin: 0; padding: 12px; background: #16171b; color: #e9e7e2;
+          :root { color-scheme: ${if (dark) "dark" else "light"}; }
+          html, body { margin: 0; padding: 12px; background: $background; color: $foreground;
             font: 15px/1.5 -apple-system, system-ui, sans-serif; }
           img, svg, canvas { max-width: 100%; height: auto; }
           pre, code { white-space: pre-wrap; word-break: break-word; }
+          table { border-collapse: collapse; } th, td { border: 1px solid $border; padding: 6px 9px; }
           a { color: #e3a15c; }
         </style></head><body>$html</body></html>
     """.trimIndent()
