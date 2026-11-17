@@ -58,7 +58,7 @@ back, IME и long-press меню всё равно ведут себя как с
 - `SharedTransitionLayout` из строки сессии в чат, 250–300 мс.
 - Нативное выделение текста (`SelectionContainer`), ссылки — Custom Tabs.
 - Haptics на отправку, стоп, push-to-talk, разрешение.
-- `LazyColumn` с стабильными ключами и `contentType`: 120 Гц, стриминг без
+- `LazyColumn` со стабильными ключами и `contentType`: 120 Гц, стриминг без
   перестроения всего списка. Автоскролл уступает руке, кнопка «вниз».
 - Skeleton вместо спиннера на первой загрузке.
 - SplashScreen API, тема и иконка adaptive.
