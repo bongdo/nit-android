@@ -147,18 +147,23 @@ fun QuestionCard(questions: List<QuestionRecord>, modifier: Modifier = Modifier)
                                 .padding(horizontal = 11.dp, vertical = 8.dp),
                         ) {
                             Column {
-                                Box(
-                                    Modifier
-                                        .padding(bottom = 4.dp)
-                                        .clip(RoundedCornerShape(2.dp))
-                                        .background(MaterialTheme.colorScheme.primary)
-                                        .padding(horizontal = 1.dp, vertical = 0.dp),
-                                ) {
-                                    Text(
-                                        "  ассистент  ",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        Modifier
+                                            .width(2.dp)
+                                            .height(30.dp)
+                                            .background(MaterialTheme.colorScheme.primary),
                                     )
+                                    Spacer(Modifier.width(6.dp))
+                                    Column {
+                                        Text("ассистент", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                        Text(
+                                            item.question,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                        )
+                                    }
                                 }
                                 Text(
                                     item.answers.joinToString(", "),

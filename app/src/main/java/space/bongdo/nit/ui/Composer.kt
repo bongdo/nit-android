@@ -190,7 +190,7 @@ fun Composer(
                 IconButton(
                     onClick = {
                         if (!canSend) return@IconButton
-                        onSend(value) { sent -> if (sent) onValueChange("") }
+                        onSend(value) { _ -> }
                     },
                     enabled = canSend,
                     modifier = Modifier.padding(end = 5.dp, bottom = 5.dp).size(34.dp),

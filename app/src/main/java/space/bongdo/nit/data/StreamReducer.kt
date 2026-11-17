@@ -113,8 +113,8 @@ object StreamReducer {
                             executed = data.boolean("executed") ?: part.executed,
                             state = ToolState(
                                 status = "running",
-                                input = if (part.name == "question") part.state?.input else data["input"],
-                                metadata = if (part.name == "question") part.state?.metadata else null,
+                                input = if (part.name == "question") (data["input"] ?: part.state?.input) else data["input"],
+                                metadata = if (part.name == "question") (data["metadata"] ?: part.state?.metadata) else null,
                             ),
                         )
                     }

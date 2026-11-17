@@ -72,6 +72,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
     val directory = state.selected?.location?.directory?.takeIf { it.isNotBlank() }
         ?: state.settings.lastDirectory
+    val display = remember(state.messages, state.running) { displayMessages(state.messages, state.running) }
     val questionForm = state.forms.firstOrNull { it.isQuestionForm() }
     val otherForms = state.forms.filterNot { it.isQuestionForm() }
     val atBottom by remember {
@@ -81,9 +82,10 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         }
     }
 
-    LaunchedEffect(state.messages.size, state.running) {
-        if (state.messages.isNotEmpty() && atBottom) {
-            listState.scrollToItem(state.messages.lastIndex)
+    val displayVersion = display.lastOrNull()?.content?.sumOf { it.text.length } ?: 0
+    LaunchedEffect(display.size, displayVersion, state.running) {
+        if (display.isNotEmpty() && atBottom) {
+            listState.scrollToItem(display.lastIndex)
         }
     }
 
@@ -140,7 +142,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             )
             state.banner?.let { Banner(it, viewModel::dismissBanner) }
             Box(Modifier.weight(1f).fillMaxWidth()) {
-                if (state.messages.isEmpty()) {
+                if (display.isEmpty()) {
                     EmptyChat(directory)
                 } else {
                     LazyColumn(
@@ -164,8 +166,8 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                                 )
                             }
                         }
-                        items(state.messages, key = { it.id }) { message ->
-                            val lastAssistant = state.messages.lastOrNull { it.type == "assistant" }?.id
+                        items(display, key = { it.id }) { message ->
+                            val lastAssistant = display.lastOrNull { it.type == "assistant" }?.id
                             MessageItem(
                                 message = message,
                                 running = state.running && message.id == lastAssistant,
@@ -174,11 +176,14 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                                 onOpenFile = { path, title -> viewModel.openFile(path, title) },
                             )
                         }
+                        if (state.running && display.lastOrNull()?.type == "user") {
+                            item("typing") { TypingLine() }
+                        }
                     }
-                    if (!atBottom && state.messages.isNotEmpty()) {
+                    if (!atBottom && display.isNotEmpty()) {
                         FloatingActionButton(
                             onClick = {
-                                scope.launch { listState.animateScrollToItem(state.messages.lastIndex) }
+                                scope.launch { listState.animateScrollToItem(display.lastIndex) }
                             },
                             modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp).size(42.dp),
                             shape = CircleShape,

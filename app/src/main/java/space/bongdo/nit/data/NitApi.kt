@@ -134,11 +134,16 @@ class NitApi(
         json.decodeFromString<SessionEnvelope>(response.body?.string().orEmpty()).data
     }
 
-    suspend fun messages(id: String, before: String? = null, limit: Int = 60): MessagesPage =
-        withContext(Dispatchers.IO) {
+    suspend fun messages(
+        id: String,
+        before: String? = null,
+        limit: Int = 60,
+        light: Boolean = true,
+    ): MessagesPage = withContext(Dispatchers.IO) {
             val url = httpUrl("/api/sessions/$id/messages").newBuilder().apply {
                 addQueryParameter("limit", limit.toString())
                 if (before != null) addQueryParameter("before", before)
+                if (light) addQueryParameter("light", "1")
             }.build()
             val response = call(Request.Builder().url(url).get().build())
             json.decodeFromString<MessagesPage>(response.body?.string().orEmpty())

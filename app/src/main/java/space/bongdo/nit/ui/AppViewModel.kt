@@ -71,6 +71,7 @@ data class UiState(
     val searching: Boolean = false,
     val hidden: Set<String> = emptySet(),
     val children: List<Session> = emptyList(),
+    val waitingIds: Set<String> = emptySet(),
     val draft: String = "",
     val draftKey: String = "",
     val drafts: Set<String> = emptySet(),
@@ -91,6 +92,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var draftJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            runCatching {
+                val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+                getApplication<Application>().cacheDir.listFiles()
+                    ?.filter { it.name.startsWith("preview-") && it.lastModified() < cutoff }
+                    ?.forEach { it.delete() }
+            }
+        }
         viewModelScope.launch {
             draftStore.keys.collect { keys -> _state.update { it.copy(drafts = keys) } }
         }
@@ -149,7 +158,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val name = title.ifBlank { path.substringAfterLast('/') }
                 val bytes = if (path.startsWith("/tmp/nit-gui-")) api.uploadedBytes(path) else api.viewBytes(path)
                 val kind = fileKind(name, mimeFor(name))
-                val file = cacheFile(name, name.substringAfterLast('.', ""))
+                val file = cacheFile(name, "")
                 file.writeBytes(bytes)
                 launchPreview(name, kind, file, mimeFor(name))
             }.onFailure { error -> _state.update { it.copy(banner = error.message) } }
@@ -270,10 +279,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (event.type == "server.connected") _state.update { it.copy(connected = true) }
             return
         }
-        if (sessionID == _state.value.selected?.id &&
-            (event.type.startsWith("permission.") || event.type.startsWith("form."))
-        ) {
-            viewModelScope.launch { loadPermissionsAndForms(sessionID) }
+        if (event.type.startsWith("permission.") || event.type.startsWith("form.")) {
+            _state.update { it.copy(waitingIds = it.waitingIds + sessionID) }
+            if (sessionID == _state.value.selected?.id) {
+                viewModelScope.launch { loadPermissionsAndForms(sessionID) }
+            } else {
+                viewModelScope.launch {
+                    val waiting = runCatching {
+                        api.permissions(sessionID).isNotEmpty() || api.forms(sessionID).isNotEmpty()
+                    }.getOrDefault(true)
+                    _state.update {
+                        it.copy(waitingIds = if (waiting) it.waitingIds + sessionID else it.waitingIds - sessionID)
+                    }
+                }
+            }
         }
         when (event.type) {
             "session.execution.started" -> {
@@ -317,6 +336,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     forms = emptyList(),
                     running = false,
                     runningIds = it.runningIds - sessionID,
+                    waitingIds = it.waitingIds - sessionID,
                 )
             }
         }
@@ -355,7 +375,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                     busy != null && (idle == null || busy > idle)
                                 }
                                 .map { session -> session.id }
-                                .toSet(),
+                                .toSet() + current.runningIds.filter { id -> sessions.none { it.id == id } },
                         )
                     }
                 }
@@ -375,7 +395,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(banner = error.message) }
                 _state.value.sessions.firstOrNull { it.id == id }
             } ?: return@launch
-            _state.update { it.copy(selected = session, messages = emptyList(), previous = null) }
+            _state.update { it.copy(selected = session, messages = emptyList(), previous = null, children = emptyList()) }
             switchDraft(id)
             settingsStore.update { it.copy(lastSession = id) }
             reloadMessages(id)
@@ -478,7 +498,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 draftJob?.cancel()
                 draftStore.set(sentKey, "")
                 runCatching { api.setDraft(sentKey, "") }
-                _state.update { it.copy(draft = "") }
+                if (_state.value.draftKey == sentKey) {
+                    if (_state.value.draft == body) {
+                        _state.update { it.copy(draft = "") }
+                    } else {
+                        draftStore.set(sentKey, _state.value.draft)
+                    }
+                }
                 if (_state.value.draftKey != session.id && _state.value.selected?.id == session.id) {
                     switchDraft(session.id)
                 }
@@ -516,6 +542,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(busy = true) }
             runCatching { api.createSession(directory) }
                 .onSuccess { session ->
+                    val newKey = "new:$directory"
+                    val stored = draftStore.get(newKey).text
+                    val moved = if (_state.value.draftKey == newKey && _state.value.draft.isNotBlank()) _state.value.draft else stored
+                    draftJob?.cancel()
+                    draftStore.set(session.id, moved)
+                    draftStore.set(newKey, "")
                     settingsStore.update { it.copy(lastDirectory = directory, lastSession = session.id) }
                     _state.update {
                         it.copy(
@@ -524,10 +556,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             previous = null,
                             busy = false,
                             children = emptyList(),
+                            draftKey = session.id,
+                            draft = moved,
                             sessions = listOf(session) + it.sessions.filter { existing -> existing.id != session.id },
                         )
                     }
-                    switchDraft(session.id)
+                    if (moved.isNotBlank()) runCatching { api.setDraft(session.id, moved) }
                     loadPermissionsAndForms(session.id)
                 }
                 .onFailure { error ->
@@ -648,16 +682,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun switchDraft(key: String) {
         val oldKey = _state.value.draftKey
         val oldText = _state.value.draft
+        if (oldKey == key) return
         draftJob?.cancel()
         _state.update { it.copy(draftKey = key, draft = "") }
         viewModelScope.launch {
-            if (oldKey.isNotBlank() && oldKey != key) draftStore.set(oldKey, oldText)
-            var text = draftStore.get(key)
-            if (text.isEmpty()) {
-                runCatching { api.draft(key) }.getOrNull()?.takeIf { !it.cleared && it.text.isNotEmpty() }?.let {
-                    text = it.text
-                    draftStore.set(key, text)
-                }
+            if (oldKey.isNotBlank()) draftStore.set(oldKey, oldText)
+            val local = draftStore.get(key)
+            var text = local.text
+            val remote = runCatching { api.draft(key) }.getOrNull()
+            if (remote != null && remote.updatedAt >= local.updatedAt) {
+                text = if (remote.cleared) "" else remote.text
+                draftStore.set(key, text, remote.updatedAt)
+            } else if (local.text.isNotEmpty() && local.updatedAt > (remote?.updatedAt ?: 0)) {
+                runCatching { api.setDraft(key, local.text) }
             }
             if (_state.value.draftKey == key && _state.value.draft.isEmpty()) {
                 _state.update { it.copy(draft = text) }
@@ -682,14 +719,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun loadPermissionsAndForms(id: String) {
-        runCatching { api.permissions(id) }.onSuccess { permissions -> _state.update { it.copy(permissions = permissions) } }
-        runCatching { api.forms(id) }.onSuccess { forms -> _state.update { it.copy(forms = forms) } }
+        var waiting = false
+        runCatching { api.permissions(id) }.onSuccess { permissions ->
+            waiting = waiting || permissions.isNotEmpty()
+            _state.update { it.copy(permissions = permissions) }
+        }
+        runCatching { api.forms(id) }.onSuccess { forms ->
+            waiting = waiting || forms.isNotEmpty()
+            _state.update { it.copy(forms = forms) }
+        }
+        _state.update {
+            it.copy(waitingIds = if (waiting) it.waitingIds + id else it.waitingIds - id)
+        }
     }
 
     fun replyPermission(request: PermissionRequest, decision: String) {
         viewModelScope.launch {
             runCatching { api.replyPermission(request.sessionID.ifBlank { _state.value.selected?.id.orEmpty() }, request.id, decision) }
-                .onSuccess { _state.update { it.copy(permissions = it.permissions.filterNot { item -> item.id == request.id }) } }
+                .onSuccess {
+                    _state.update {
+                        val rest = it.permissions.filterNot { item -> item.id == request.id }
+                        val sid = request.sessionID.ifBlank { it.selected?.id.orEmpty() }
+                        it.copy(
+                            permissions = rest,
+                            waitingIds = if (rest.isEmpty() && it.forms.isEmpty()) it.waitingIds - sid else it.waitingIds,
+                        )
+                    }
+                }
                 .onFailure { error -> _state.update { it.copy(banner = error.message) } }
         }
     }
@@ -698,7 +754,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val id = _state.value.selected?.id ?: return
         viewModelScope.launch {
             runCatching { api.replyForm(id, form.id, answer) }
-                .onSuccess { _state.update { it.copy(forms = it.forms.filterNot { item -> item.id == form.id }) } }
+                .onSuccess {
+                    _state.update {
+                        val rest = it.forms.filterNot { item -> item.id == form.id }
+                        it.copy(
+                            forms = rest,
+                            waitingIds = if (rest.isEmpty() && it.permissions.isEmpty()) it.waitingIds - id else it.waitingIds,
+                        )
+                    }
+                }
                 .onFailure { error -> _state.update { it.copy(banner = error.message) } }
         }
     }
@@ -707,7 +771,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val id = _state.value.selected?.id ?: return
         viewModelScope.launch {
             runCatching { api.cancelForm(id, form.id) }
-                .onSuccess { _state.update { it.copy(forms = it.forms.filterNot { item -> item.id == form.id }) } }
+                .onSuccess {
+                    _state.update {
+                        val rest = it.forms.filterNot { item -> item.id == form.id }
+                        it.copy(
+                            forms = rest,
+                            waitingIds = if (rest.isEmpty() && it.permissions.isEmpty()) it.waitingIds - id else it.waitingIds,
+                        )
+                    }
+                }
                 .onFailure { error -> _state.update { it.copy(banner = error.message) } }
         }
     }

@@ -20,7 +20,7 @@ private val textExtensions = setOf(
     "env", "gitignore", "diff", "patch",
 )
 
-private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif")
+private val imageExtensions = setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "heif", "avif", "svg", "tiff", "tif")
 
 private val audioExtensions = setOf("mp3", "wav", "ogg", "oga", "m4a", "flac", "aac", "opus", "amr")
 

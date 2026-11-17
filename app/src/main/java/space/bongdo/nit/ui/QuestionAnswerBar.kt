@@ -149,12 +149,16 @@ fun QuestionAnswerBar(
                 if (step > 0) {
                     TextButton(onClick = { step -= 1 }) { Text("Назад") }
                 }
+                val filled = values[current.key].orEmpty().isNotBlank()
                 if (step < fields.size - 1) {
-                    TextButton(onClick = { step += 1 }) { Text("Дальше") }
+                    TextButton(
+                        onClick = { step += 1 },
+                        enabled = current.required != true || filled,
+                    ) { Text("Дальше") }
                 } else {
                     TextButton(
                         onClick = { submit() },
-                        enabled = values[current.key].orEmpty().isNotBlank(),
+                        enabled = current.required != true || filled,
                     ) { Text("Ответить") }
                 }
             }

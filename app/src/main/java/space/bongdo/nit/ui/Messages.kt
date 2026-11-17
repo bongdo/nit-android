@@ -39,6 +39,43 @@ import space.bongdo.nit.data.Message
 import space.bongdo.nit.data.Part
 import space.bongdo.nit.data.UserFile
 
+fun displayMessages(messages: List<Message>, running: Boolean): List<Message> {
+    val out = mutableListOf<Message>()
+    var index = 0
+    while (index < messages.size) {
+        val message = messages[index]
+        if (message.type == "assistant") {
+            val group = mutableListOf(message)
+            var next = index + 1
+            while (next < messages.size && messages[next].type == "assistant") {
+                group += messages[next]
+                next += 1
+            }
+            val merged = message.copy(
+                content = group.flatMap { it.content.orEmpty() },
+                error = group.lastOrNull { it.error != null }?.error,
+                cost = group.sumOf { it.cost ?: 0.0 },
+                tokens = group.lastOrNull { it.tokens != null }?.tokens,
+                agent = group.firstOrNull { !it.agent.isNullOrBlank() }?.agent,
+                time = group.first().time,
+            )
+            val visible = merged.content.orEmpty().any { part ->
+                (part.type == "text" && part.text.isNotBlank()) ||
+                    (part.type == "tool" && part.name == "question" && questionRecords(part).any { it.answers.isNotEmpty() })
+            } || merged.error != null
+            val last = running && next == messages.size
+            if (visible || last) out += merged
+            index = next
+        } else if (message.type == "user") {
+            out += message
+            index += 1
+        } else {
+            index += 1
+        }
+    }
+    return out
+}
+
 @Composable
 fun MessageItem(
     message: Message,
@@ -158,6 +195,13 @@ private fun AssistantMessage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (running && textParts.isNotEmpty()) {
+                Text(
+                    "  работает",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
             Spacer(Modifier.weight(1f))
             Text(
                 shortTime(message.time.created),
@@ -167,7 +211,8 @@ private fun AssistantMessage(
         }
         Spacer(Modifier.height(5.dp))
 
-        if (textParts.isEmpty() && questions.isEmpty() && message.error == null && running) {
+        val answeredQuestion = questions.any { part -> questionRecords(part).any { it.answers.isNotEmpty() } }
+        if (textParts.isEmpty() && !answeredQuestion && message.error == null && running) {
             TypingLine()
         }
 
@@ -216,7 +261,7 @@ private fun AssistantMessage(
 }
 
 @Composable
-private fun TypingLine() {
+fun TypingLine() {
     Text(
         "печатает…",
         style = MaterialTheme.typography.bodySmall,

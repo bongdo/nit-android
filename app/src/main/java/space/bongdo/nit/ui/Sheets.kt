@@ -170,6 +170,7 @@ fun SessionsSheet(
                             running = state.runningIds.contains(session.id),
                             selected = state.selected?.id == session.id,
                             draft = state.drafts.contains(session.id),
+                            waiting = state.waitingIds.contains(session.id),
                             onClick = { onSelect(session.id) },
                         )
                     }
@@ -191,7 +192,7 @@ fun SessionsSheet(
 }
 
 @Composable
-private fun SessionRow(session: Session, running: Boolean, selected: Boolean, draft: Boolean, onClick: () -> Unit) {
+private fun SessionRow(session: Session, running: Boolean, selected: Boolean, draft: Boolean, waiting: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -206,6 +207,15 @@ private fun SessionRow(session: Session, running: Boolean, selected: Boolean, dr
                 .clip(CircleShape)
                 .background(if (running) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant),
         )
+        if (waiting) {
+            Spacer(Modifier.width(3.dp))
+            Box(
+                Modifier
+                    .size(5.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary),
+            )
+        }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
             Text(

@@ -546,8 +546,13 @@ private fun AnnotatedString.Builder.appendInline(
                 ?.let(::openable)
             val rawDestination = node.findChildOfType(MarkdownElementTypes.LINK_DESTINATION)
                 ?.getTextInNode(source)?.toString()?.trim()?.trim('<', '>').orEmpty()
-            if (rawDestination.contains("/api/file?") || rawDestination.contains("/api/view?") || rawDestination.startsWith("file:")) {
-                appendFileLink(rawDestination, accent) {
+            if (rawDestination.contains("/api/file?") || rawDestination.contains("/api/view?") || rawDestination.startsWith("file:") || isRelativeFilePath(rawDestination)) {
+                val destinationValue = if (isRelativeFilePath(rawDestination)) {
+                    resolvePath(rawDestination, directory)
+                } else {
+                    rawDestination
+                }
+                appendFileLink(destinationValue, accent) {
                     appendLinkText(node, source, accent, codeBackground, directory)
                 }
             } else {
@@ -616,6 +621,14 @@ private fun AnnotatedString.Builder.appendLink(destination: String?, accent: Col
     pop()
 }
 
+
+private fun isRelativeFilePath(url: String): Boolean {
+    val value = url.trim()
+    if (value.isEmpty() || value.startsWith("#") || value.contains(' ')) return false
+    if (value.startsWith("/") || value.startsWith("~")) return false
+    if (Regex("""^[a-z][a-z0-9+.-]*:""", RegexOption.IGNORE_CASE).containsMatchIn(value)) return false
+    return fileTarget(value) != null
+}
 
 private fun openable(url: String?): String? {
     val value = url?.trim().orEmpty()

@@ -79,6 +79,7 @@ fun HtmlView(
 
                     override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest) = null
                 }
+                tag = html.hashCode().toString() + dark
                 loadDataWithBaseURL(
                     null,
                     wrapHtml(html, dark),
@@ -86,6 +87,13 @@ fun HtmlView(
                     "utf-8",
                     null,
                 )
+            }
+            },
+        update = { view ->
+            val key = html.hashCode().toString() + dark
+            if (view.tag != key) {
+                view.tag = key
+                view.loadDataWithBaseURL(null, wrapHtml(html, dark), "text/html", "utf-8", null)
             }
         },
     )
