@@ -47,7 +47,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import space.bongdo.nit.data.FormField
 import space.bongdo.nit.data.FormInfo
 import space.bongdo.nit.data.PermissionRequest
@@ -141,9 +140,9 @@ private fun FormCard(form: FormInfo, onReply: (FormInfo, JsonObject) -> Unit, on
         form.fields.forEach { field ->
             val default = field.default
             if (field.type == "boolean" || field.type == "confirm") {
-                initialChecks[field.key] = default?.jsonPrimitive?.booleanOrNull ?: false
+                initialChecks[field.key] = (default as? JsonPrimitive)?.booleanOrNull ?: false
             } else {
-                default?.jsonPrimitive?.contentOrNull?.let { initialValues[field.key] = it }
+                (default as? JsonPrimitive)?.contentOrNull?.let { initialValues[field.key] = it }
             }
         }
         initialValues to initialChecks
@@ -259,7 +258,7 @@ private fun FormField.visible(values: Map<String, String>, checks: Map<String, B
     if (conditions.isNullOrEmpty()) return true
     return conditions.all { condition ->
         val actual = checks[condition.key]?.toString() ?: values[condition.key].orEmpty()
-        val expected = condition.value?.jsonPrimitive?.contentOrNull.orEmpty()
+        val expected = (condition.value as? JsonPrimitive)?.contentOrNull.orEmpty()
         if (condition.op == "eq") actual == expected else actual != expected
     }
 }
