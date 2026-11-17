@@ -1,6 +1,13 @@
 package space.bongdo.nit.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +49,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
@@ -60,9 +68,20 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     var pickerCreates by rememberSaveable { mutableStateOf(true) }
     var themeOpen by rememberSaveable { mutableStateOf(false) }
     var subagentsOpen by rememberSaveable { mutableStateOf(false) }
-    var attachments by remember { mutableStateOf<List<UserFile>>(emptyList()) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val focusManager = LocalFocusManager.current
+    var focusRequest by remember { mutableStateOf(0) }
+    var dragged by remember { mutableStateOf(false) }
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     val title = remember(state.selected, state.messages) {
         val firstUser = state.messages.firstOrNull { it.type == "user" }
@@ -90,6 +109,21 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
 
     var userScrolled by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        launch {
+            listState.interactionSource.interactions.collect { interaction ->
+                if (interaction is DragInteraction.Start) dragged = true
+            }
+        }
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { scrolling ->
+                if (!scrolling && dragged) {
+                    dragged = false
+                    if (atBottom) focusRequest += 1 else focusManager.clearFocus()
+                }
+            }
+    }
     var anchorId by remember { mutableStateOf<String?>(null) }
     var anchorOffset by remember { mutableStateOf(0) }
     LaunchedEffect(listState) {
@@ -219,20 +253,17 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 directory = directory,
                 running = state.running,
                 busy = state.busy,
-                attachments = attachments,
+                attachments = state.attachments,
+                focusRequest = focusRequest,
                 onAttach = { uri, name ->
-                    viewModel.upload(uri) { file ->
-                        attachments = attachments + file.copy(name = name ?: file.name)
-                    }
+                    viewModel.upload(uri) { file -> viewModel.addAttachment(file.copy(name = name ?: file.name)) }
                 },
-                onRemove = { file -> attachments = attachments.filterNot { it == file } },
-                onSend = { text, done ->
-                    viewModel.send(text, attachments) { sent ->
-                        if (sent) attachments = emptyList()
-                        done(sent)
-                    }
+                onRemove = viewModel::removeAttachment,
+                onSend = { text, delivery, done ->
+                    viewModel.send(text, state.attachments, delivery) { sent -> done(sent) }
                 },
                 onStop = viewModel::stop,
+                onGrammar = viewModel::checkGrammar,
                 onCommand = { command ->
                     when (command) {
                         "new" -> {
@@ -287,6 +318,13 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 subagentsOpen = false
                 viewModel.openSubagent(child)
             },
+        )
+    }
+    if (state.grammarOpen) {
+        GrammarSheet(
+            matches = state.grammar,
+            onDismiss = viewModel::dismissGrammar,
+            onApply = viewModel::applyGrammar,
         )
     }
     if (themeOpen) {

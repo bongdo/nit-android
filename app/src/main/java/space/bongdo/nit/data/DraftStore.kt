@@ -5,6 +5,8 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -31,6 +33,21 @@ class DraftStore(private val context: Context) {
             text = prefs[stringPreferencesKey(prefix + key)].orEmpty(),
             updatedAt = prefs[longPreferencesKey(prefix + key + ".updated")] ?: 0,
         )
+    }
+
+    suspend fun getFiles(key: String): List<UserFile> {
+        if (key.isBlank()) return emptyList()
+        val raw = context.draftData.data.first()[stringPreferencesKey(prefix + key + ".files")] ?: return emptyList()
+        return runCatching { Json { ignoreUnknownKeys = true }.decodeFromString<List<UserFile>>(raw) }.getOrDefault(emptyList())
+    }
+
+    suspend fun setFiles(key: String, files: List<UserFile>) {
+        if (key.isBlank()) return
+        context.draftData.edit { prefs ->
+            if (files.isEmpty()) prefs.remove(stringPreferencesKey(prefix + key + ".files"))
+            else prefs[stringPreferencesKey(prefix + key + ".files")] =
+                Json { ignoreUnknownKeys = true }.encodeToString(files)
+        }
     }
 
     suspend fun set(key: String, text: String, updatedAt: Long = System.currentTimeMillis()) {

@@ -111,12 +111,20 @@ private fun UserMessage(message: Message, onOpenFile: (String, String) -> Unit) 
                 }
             }
         }
-        Text(
-            shortTime(message.time.created),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            modifier = Modifier.padding(top = 3.dp, end = 4.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp, end = 4.dp)) {
+            if (message.delivery == "steer" || message.delivery == "queue") {
+                Text(
+                    if (message.delivery == "steer") "в текущий ход · " else "в очередь · ",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                )
+            }
+            Text(
+                shortTime(message.time.created),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+        }
     }
 }
 

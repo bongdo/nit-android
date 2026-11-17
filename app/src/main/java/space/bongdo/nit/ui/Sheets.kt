@@ -1,5 +1,10 @@
 package space.bongdo.nit.ui
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,12 +28,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Search
@@ -40,6 +49,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
@@ -77,24 +87,28 @@ fun SessionsSheet(
     onNew: () -> Unit,
 ) {
     var query by rememberSaveable { mutableStateOf("") }
+    var allDirectories by rememberSaveable { mutableStateOf(true) }
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = false)
-    val filtered = remember(state.sessions, query) {
-        if (query.isBlank()) state.sessions.filter { it.parentID == null && it.id !in state.hidden }
-        else state.sessions.filter {
-            it.parentID == null && it.id !in state.hidden &&
-                (it.title.orEmpty().contains(query, ignoreCase = true) ||
-                    it.location.directory.contains(query, ignoreCase = true) ||
-                    it.id.contains(query, ignoreCase = true))
+    val selectedDirectory = state.selected?.location?.directory ?: state.settings.lastDirectory
+    val scoped = remember(state.sessions, state.hidden, query, allDirectories, selectedDirectory) {
+        state.sessions.filter { session ->
+            session.parentID == null && session.id !in state.hidden &&
+                (allDirectories || selectedDirectory.isBlank() || session.location.directory == selectedDirectory) &&
+                (query.isBlank() ||
+                    session.title.orEmpty().contains(query, ignoreCase = true) ||
+                    session.location.directory.contains(query, ignoreCase = true) ||
+                    session.id.contains(query, ignoreCase = true))
         }
     }
-    val groups = remember(filtered) {
-        filtered.groupBy { it.location.directory }.toList().sortedBy { it.first }
-    }
+    val running = scoped.filter { state.runningIds.contains(it.id) }
+    val rest = scoped.filterNot { state.runningIds.contains(it.id) }
+    val groups = remember(rest) { rest.groupBy { it.location.directory }.toList().sortedBy { it.first } }
     LaunchedEffect(query) {
         if (query.length < 2) return@LaunchedEffect
         delay(350)
         onSearch(query)
     }
+    val directoryCount = scoped.map { it.location.directory }.distinct().size
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -102,37 +116,41 @@ fun SessionsSheet(
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 760.dp)) {
+        Column(Modifier.fillMaxWidth().heightIn(max = 780.dp)) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    Icons.Outlined.Folder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Outlined.Layers, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(9.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Все чаты", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "${groups.size} ${plural(groups.size, "папка", "папки", "папок")} · ${filtered.size} ${plural(filtered.size, "чат", "чата", "чатов")}",
+                        "$directoryCount ${plural(directoryCount, "папка", "папки", "папок")} · ${scoped.size} ${plural(scoped.size, "чат", "чата", "чатов")}" +
+                            if (running.isNotEmpty()) " · ${running.size} работает" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(onClick = onNew) {
-                    Icon(Icons.Outlined.Add, contentDescription = "новый чат")
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Outlined.Close, contentDescription = "закрыть", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (selectedDirectory.isNotBlank()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)) {
+                    ScopeTab("Все", allDirectories) { allDirectories = true }
+                    Spacer(Modifier.width(6.dp))
+                    ScopeTab(File(selectedDirectory).name.ifBlank { selectedDirectory }, !allDirectories) { allDirectories = false }
                 }
             }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it; if (it.isBlank()) onSearch("") },
-                placeholder = { Text("Поиск чатов", style = MaterialTheme.typography.bodySmall) },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(17.dp))
-                },
+                placeholder = { Text("Поиск по названию, папке или id", style = MaterialTheme.typography.bodySmall) },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(17.dp)) },
+                trailingIcon = if (query.isNotBlank()) {
+                    { Icon(Icons.Outlined.Close, contentDescription = "очистить", modifier = Modifier.size(16.dp).clickableNoRipple { query = ""; onSearch("") }) }
+                } else null,
                 singleLine = true,
                 shape = RoundedCornerShape(10.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
@@ -145,29 +163,34 @@ fun SessionsSheet(
                 ),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
             )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 3.dp)
+                    .clip(RoundedCornerShape(9.dp))
+                    .clickable(onClick = onNew)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .padding(horizontal = 11.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Новый чат", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text(
+                    if (selectedDirectory.isBlank()) "выбрать папку" else File(selectedDirectory).name.ifBlank { selectedDirectory },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             LazyColumn(Modifier.weight(1f, fill = false)) {
-                groups.forEach { (directory, sessions) ->
-                    item("head-$directory") {
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                File(directory).name.ifBlank { directory },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                "  ${sessions.size}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            )
-                        }
-                    }
-                    items(sessions, key = { it.id }) { session ->
+                if (running.isNotEmpty()) {
+                    item("running-head") { GroupHeader("Работают", running.size, Icons.Outlined.PlayArrow) }
+                    items(running, key = { "run-${it.id}" }) { session ->
                         SessionRow(
                             session = session,
-                            running = state.runningIds.contains(session.id),
+                            running = true,
                             selected = state.selected?.id == session.id,
                             draft = state.drafts.contains(session.id),
                             waiting = state.waitingIds.contains(session.id),
@@ -175,24 +198,80 @@ fun SessionsSheet(
                         )
                     }
                 }
-                if (filtered.isEmpty()) {
-                    item("empty") {
-                        Text(
-                            if (state.searching) "ищу…" else "ничего не найдено",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(18.dp),
+                groups.forEach { (directory, sessions) ->
+                    item("head-$directory") {
+                        GroupHeader(File(directory).name.ifBlank { directory }, sessions.size, Icons.Outlined.Folder)
+                    }
+                    items(sessions, key = { it.id }) { session ->
+                        SessionRow(
+                            session = session,
+                            running = false,
+                            selected = state.selected?.id == session.id,
+                            draft = state.drafts.contains(session.id),
+                            waiting = state.waitingIds.contains(session.id),
+                            onClick = { onSelect(session.id) },
                         )
                     }
                 }
-                item("bottom-space") { Spacer(Modifier.height(20.dp)) }
+                if (scoped.isEmpty()) {
+                    item("empty") {
+                        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Outlined.Layers, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(26.dp))
+                            Spacer(Modifier.height(8.dp))
+                            Text(if (state.searching) "Ищу…" else "Пусто", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Начните новый чат или измените фильтр.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                item("bottom-space") { Spacer(Modifier.height(24.dp)) }
             }
         }
     }
 }
 
 @Composable
+private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(7.dp))
+            .clickableNoRipple(onClick)
+            .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 10.dp, vertical = 5.dp),
+    )
+}
+
+@Composable
+private fun GroupHeader(label: String, count: Int, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("  $count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+    }
+}
+
+@Composable
 private fun SessionRow(session: Session, running: Boolean, selected: Boolean, draft: Boolean, waiting: Boolean, onClick: () -> Unit) {
+    val alpha = if (running) {
+        val pulse = rememberInfiniteTransition(label = "running")
+        val value by pulse.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+            label = "running-alpha",
+        )
+        value
+    } else {
+        1f
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -205,7 +284,10 @@ private fun SessionRow(session: Session, running: Boolean, selected: Boolean, dr
             Modifier
                 .size(if (running) 7.dp else 4.dp)
                 .clip(CircleShape)
-                .background(if (running) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outlineVariant),
+                .background(
+                    if (running) MaterialTheme.colorScheme.tertiary.copy(alpha = alpha)
+                    else MaterialTheme.colorScheme.outlineVariant,
+                ),
         )
         if (waiting) {
             Spacer(Modifier.width(3.dp))
@@ -423,53 +505,113 @@ fun DirectorySheet(
 ) {
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var browse by remember { mutableStateOf(false) }
+    var pathInput by remember { mutableStateOf("") }
+    var pathError by remember { mutableStateOf<String?>(null) }
+
+    fun openPath(path: String) {
+        val value = path.trim()
+        if (!value.startsWith("/")) {
+            pathError = "Нужен абсолютный путь, например /home/ubuntu/Projects"
+            return
+        }
+        pathError = null
+        browse = true
+        onLoad(value)
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheet,
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 26.dp)) {
-            Text(if (create) "Где начать чат" else "Папка по умолчанию", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Тот же каталог, что в nit-gui на компьютере.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(12.dp))
-            if (!browse && state.projects.isNotEmpty()) {
-                SectionLabel("Проекты")
-                state.projects.take(12).forEach { project ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onPick(project.canonical) }.padding(vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(9.dp))
-                        Text(
-                            File(project.canonical).name.ifBlank { project.canonical },
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            project.canonical,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.width(180.dp),
-                        )
-                    }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.FolderOpen, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(9.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(if (create) "Где начать чат" else "Папка по умолчанию", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Тот же каталог, что в nit-gui на компьютере",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                TextButton(onClick = {
-                    browse = true
-                    onLoad(state.settings.lastDirectory.ifBlank { null })
-                }) {
-                    Text("Выбрать другую папку")
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Outlined.Close, contentDescription = "закрыть", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = pathInput,
+                    onValueChange = { pathInput = it; pathError = null },
+                    placeholder = { Text("/абсолютный/путь", style = MaterialTheme.typography.bodySmall) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(9.dp),
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { openPath(pathInput) }),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    ),
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(6.dp))
+                TextButton(onClick = { openPath(pathInput) }) { Text("Открыть") }
+            }
+            pathError?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(8.dp))
+
+            if (!browse) {
+                if (state.projects.isEmpty()) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                        Text("Загружаю проекты…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = {
+                        browse = true
+                        onLoad(state.settings.lastDirectory.ifBlank { null })
+                    }) { Text("Другая папка") }
+                } else {
+                    GroupHeader("Проекты", state.projects.size, Icons.Outlined.FolderOpen)
+                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                        items(state.projects, key = { it.id }) { project ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .clip(RoundedCornerShape(9.dp))
+                                    .clickable { onPick(project.canonical) }
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(9.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(File(project.canonical).name.ifBlank { project.canonical }, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(project.canonical, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                                Icon(Icons.Outlined.ChevronRight, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    TextButton(onClick = {
+                        browse = true
+                        onLoad(state.settings.lastDirectory.ifBlank { null })
+                    }) { Text("Другая папка") }
                 }
             } else {
                 val listing = state.folders
-                if (listing != null) {
+                if (listing == null) {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                        Text("Загружаю папку…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    TextButton(onClick = { openPath("/") }) { Text("Начать с /") }
+                } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         TextButton(onClick = { browse = false }) { Text("Проекты") }
                         IconButton(onClick = { onLoad(listing.parent.ifBlank { null }) }) {
@@ -482,12 +624,16 @@ fun DirectorySheet(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { onPick(listing.path) }) { Text("Здесь") }
                     }
-                    LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
                         items(listing.dirs, key = { it }) { dir ->
                             Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onLoad(File(listing.path, dir).path) }.padding(vertical = 9.dp),
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 1.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable { onLoad(File(listing.path, dir).path) }
+                                    .padding(horizontal = 4.dp, vertical = 9.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -496,16 +642,22 @@ fun DirectorySheet(
                                 Icon(Icons.Outlined.ChevronRight, contentDescription = null, modifier = Modifier.size(15.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
+                        if (listing.dirs.isEmpty()) {
+                            item("empty") {
+                                Text("Пустая папка", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(12.dp))
+                            }
+                        }
                     }
-                } else {
-                    Text("Загружаю…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = {
-                        browse = true
-                        onLoad("/")
-                    }) { Text("Начать с /") }
+                    Spacer(Modifier.height(6.dp))
+                    Button(
+                        onClick = { onPick(listing.path) },
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (create) "Начать чат здесь" else "Выбрать эту папку")
+                    }
                 }
             }
         }
     }
 }
-

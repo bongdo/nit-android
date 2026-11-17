@@ -4,6 +4,11 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Spellcheck
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +40,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +49,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,11 +66,22 @@ fun Composer(
     attachments: List<UserFile>,
     onAttach: (Uri, String?) -> Unit,
     onRemove: (UserFile) -> Unit,
-    onSend: (String, (Boolean) -> Unit) -> Unit,
+    onSend: (String, String?, (Boolean) -> Unit) -> Unit,
     onStop: () -> Unit,
     onCommand: (String) -> Unit,
+    onGrammar: () -> Unit,
+    focusRequest: Int = 0,
 ) {
     var attachOpen by rememberSaveable { mutableStateOf(false) }
+    val focusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    LaunchedEffect(focusRequest) {
+        if (focusRequest > 0) {
+            runCatching { focusRequester.requestFocus() }
+            keyboard?.show()
+        }
+    }
+    var delivery by rememberSaveable(running) { mutableStateOf("steer") }
     var commandDismissed by rememberSaveable { mutableStateOf(false) }
     val photo = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -74,7 +93,7 @@ fun Composer(
         ActivityResultContracts.GetContent(),
     ) { uri -> if (uri != null) onAttach(uri, null) }
 
-    val canSend = (value.isNotBlank() || attachments.isNotEmpty()) && !busy && !running
+    val canSend = (value.isNotBlank() || attachments.isNotEmpty()) && !busy
     val query = if (value.startsWith("/") && !value.contains("\n")) value.drop(1) else null
     val matches = if (query != null && !query.contains(" ")) {
         SLASH_COMMANDS.filter { it.id.startsWith(query.lowercase(), ignoreCase = true) }
@@ -89,7 +108,37 @@ fun Composer(
         modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding(),
     ) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            if (paletteOpen) {
+            if (running) {
+                Row(
+                    Modifier.padding(start = 4.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf("steer" to "В текущий ход", "queue" to "В очередь").forEach { (id, label) ->
+                        val active = delivery == id
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                .clickableNoRipple { delivery = id }
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
+                    Text(
+                        "агент сейчас работает",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            AnimatedVisibility(
+                visible = paletteOpen,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
                 SlashPalette(
                     commands = matches,
                     onPick = { command ->
@@ -155,6 +204,14 @@ fun Composer(
                         modifier = Modifier.size(20.dp),
                     )
                 }
+                IconButton(onClick = onGrammar, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Outlined.Spellcheck,
+                        contentDescription = "грамматика",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
                 Box(Modifier.weight(1f).padding(vertical = 11.dp, horizontal = 2.dp)) {
                     BasicTextField(
                         value = value,
@@ -167,7 +224,10 @@ fun Composer(
                         maxLines = 6,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                         keyboardActions = KeyboardActions(),
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 20.dp, max = 150.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 20.dp, max = 150.dp)
+                            .focusRequester(focusRequester),
                     )
                     if (value.isEmpty()) {
                         Text(
@@ -190,7 +250,7 @@ fun Composer(
                 IconButton(
                     onClick = {
                         if (!canSend) return@IconButton
-                        onSend(value) { _ -> }
+                        onSend(value, if (running) delivery else null) { _ -> }
                     },
                     enabled = canSend,
                     modifier = Modifier.padding(end = 5.dp, bottom = 5.dp).size(34.dp),

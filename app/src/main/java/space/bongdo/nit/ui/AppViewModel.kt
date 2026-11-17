@@ -22,6 +22,7 @@ import space.bongdo.nit.data.DraftStore
 import space.bongdo.nit.data.EventStream
 import space.bongdo.nit.data.FolderListing
 import space.bongdo.nit.data.FormInfo
+import space.bongdo.nit.data.GrammarMatch
 import space.bongdo.nit.data.Message
 import space.bongdo.nit.data.MessageTime
 import space.bongdo.nit.data.Model
@@ -37,6 +38,7 @@ import space.bongdo.nit.data.StreamEvent
 import space.bongdo.nit.data.StreamReducer
 import space.bongdo.nit.data.UnauthorizedException
 import space.bongdo.nit.data.UserFile
+import space.bongdo.nit.NotificationHelper
 import space.bongdo.nit.PreviewActivity
 import space.bongdo.nit.data.parseServer
 import space.bongdo.nit.ui.PreviewKind
@@ -75,6 +77,11 @@ data class UiState(
     val draft: String = "",
     val draftKey: String = "",
     val drafts: Set<String> = emptySet(),
+    val attachments: List<UserFile> = emptyList(),
+    val grammar: List<GrammarMatch> = emptyList(),
+    val grammarOpen: Boolean = false,
+    val grammarBusy: Boolean = false,
+    val grammarShift: Int = 0,
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -82,6 +89,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val secureStore = SecureStore(application)
     private val draftStore = DraftStore(application)
     private val api = NitApi(secureStore.cookies)
+    private val notifications = NotificationHelper(application)
+    private val notifiedWaiting = mutableSetOf<String>()
+    private val notifiedDone = mutableSetOf<String>()
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -90,6 +100,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var currentServer: ServerAddress? = null
     private var refreshJob: Job? = null
     private var draftJob: Job? = null
+    private var pendingSession: String? = null
 
     init {
         viewModelScope.launch {
@@ -232,6 +243,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { api.hiddenSessions() }.onSuccess { hidden -> _state.update { it.copy(hidden = hidden) } }
         }
         refreshSessions()
+        val pending = pendingSession
+        if (pending != null) {
+            pendingSession = null
+            runCatching { openSession(pending) }
+            return
+        }
         val settings = _state.value.settings
         if (settings.lastSession.isNotBlank()) {
             runCatching { openSession(settings.lastSession) }
@@ -281,6 +298,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (event.type.startsWith("permission.") || event.type.startsWith("form.")) {
             _state.update { it.copy(waitingIds = it.waitingIds + sessionID) }
+            notifyWaiting(sessionID)
             if (sessionID == _state.value.selected?.id) {
                 viewModelScope.launch { loadPermissionsAndForms(sessionID) }
             } else {
@@ -288,6 +306,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val waiting = runCatching {
                         api.permissions(sessionID).isNotEmpty() || api.forms(sessionID).isNotEmpty()
                     }.getOrDefault(true)
+                    if (!waiting) notifiedWaiting.remove(sessionID)
                     _state.update {
                         it.copy(waitingIds = if (waiting) it.waitingIds + sessionID else it.waitingIds - sessionID)
                     }
@@ -296,6 +315,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         when (event.type) {
             "session.execution.started" -> {
+                notifiedWaiting.remove(sessionID)
+                notifiedDone.remove(sessionID)
+                notifications.cancelWaiting(sessionID)
                 _state.update { it.copy(runningIds = it.runningIds + sessionID) }
             }
             "session.idle",
@@ -304,6 +326,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             "session.execution.interrupted",
             -> {
                 _state.update { it.copy(runningIds = it.runningIds - sessionID) }
+                notifiedWaiting.remove(sessionID)
+                notifyDone(sessionID)
                 if (sessionID == _state.value.selected?.id) {
                     viewModelScope.launch {
                         reloadMessages(sessionID)
@@ -389,6 +413,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun openSessionFromNotification(id: String) {
+        if (_state.value.phase == Phase.Ready) openSession(id) else pendingSession = id
+    }
+
     fun openSession(id: String) {
         viewModelScope.launch {
             val session = runCatching { api.session(id) }.getOrElse { error ->
@@ -445,7 +473,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun send(text: String, attachments: List<UserFile>, onResult: (Boolean) -> Unit = {}) {
+    fun send(
+        text: String,
+        attachments: List<UserFile>,
+        delivery: String? = null,
+        onResult: (Boolean) -> Unit = {},
+    ) {
         val body = text.trim()
         if (body.isEmpty() && attachments.isEmpty()) {
             onResult(false)
@@ -480,6 +513,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     time = MessageTime(created = System.currentTimeMillis()),
                     text = body,
                     files = attachments.ifEmpty { null },
+                    delivery = delivery,
                 )
                 _state.update {
                     it.copy(
@@ -488,7 +522,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         runningIds = it.runningIds + session.id,
                     )
                 }
-                val admitted = api.prompt(session.id, body, attachments)
+                val admitted = api.prompt(session.id, body, attachments, delivery)
                 if (!admitted.isNullOrBlank()) {
                     _state.update { current ->
                         current.copy(messages = current.messages.map { if (it.id == localID) it.copy(id = admitted) else it })
@@ -497,7 +531,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(busy = false) }
                 draftJob?.cancel()
                 draftStore.set(sentKey, "")
+                draftStore.setFiles(sentKey, emptyList())
                 runCatching { api.setDraft(sentKey, "") }
+                if (_state.value.draftKey == sentKey && _state.value.attachments == attachments) {
+                    _state.update { it.copy(attachments = emptyList()) }
+                }
                 if (_state.value.draftKey == sentKey) {
                     if (_state.value.draft == body) {
                         _state.update { it.copy(draft = "") }
@@ -545,9 +583,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     val newKey = "new:$directory"
                     val stored = draftStore.get(newKey).text
                     val moved = if (_state.value.draftKey == newKey && _state.value.draft.isNotBlank()) _state.value.draft else stored
+                    val movedFiles = if (_state.value.draftKey == newKey) _state.value.attachments else draftStore.getFiles(newKey)
                     draftJob?.cancel()
                     draftStore.set(session.id, moved)
+                    draftStore.setFiles(session.id, movedFiles)
                     draftStore.set(newKey, "")
+                    draftStore.setFiles(newKey, emptyList())
                     settingsStore.update { it.copy(lastDirectory = directory, lastSession = session.id) }
                     _state.update {
                         it.copy(
@@ -558,6 +599,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             children = emptyList(),
                             draftKey = session.id,
                             draft = moved,
+                            attachments = movedFiles,
                             sessions = listOf(session) + it.sessions.filter { existing -> existing.id != session.id },
                         )
                     }
@@ -667,6 +709,55 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         openSession(parent)
     }
 
+    fun checkGrammar() {
+        val text = _state.value.draft
+        if (text.isBlank()) {
+            note("Нечего проверять")
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(grammarBusy = true) }
+            val trimmed = text.trim()
+            val shift = if (trimmed.isEmpty()) 0 else text.indexOf(trimmed).coerceAtLeast(0)
+            runCatching { api.grammar(trimmed) }
+                .onSuccess { matches ->
+                    _state.update { it.copy(grammar = matches, grammarBusy = false, grammarShift = shift) }
+                    if (matches.isEmpty()) note("Ошибок не найдено")
+                    else _state.update { it.copy(grammarOpen = true) }
+                }
+                .onFailure { error ->
+                    _state.update { it.copy(grammarBusy = false, banner = error.message) }
+                }
+        }
+    }
+
+    fun dismissGrammar() = _state.update { it.copy(grammarOpen = false) }
+
+    fun applyGrammar(match: GrammarMatch, replacement: String) {
+        val key = _state.value.draftKey
+        val text = _state.value.draft
+        val start = (match.offset + _state.value.grammarShift).coerceIn(0, text.length)
+        val end = (match.offset + _state.value.grammarShift + match.length).coerceIn(start, text.length)
+        if (start == end) return
+        val next = text.replaceRange(start, end, replacement)
+        setDraft(next)
+        _state.update { it.copy(grammar = emptyList(), grammarOpen = false) }
+    }
+
+    fun addAttachment(file: UserFile) {
+        val key = _state.value.draftKey
+        val next = _state.value.attachments + file
+        _state.update { it.copy(attachments = next) }
+        if (key.isNotBlank()) viewModelScope.launch { draftStore.setFiles(key, next) }
+    }
+
+    fun removeAttachment(file: UserFile) {
+        val key = _state.value.draftKey
+        val next = _state.value.attachments.filterNot { it == file }
+        _state.update { it.copy(attachments = next) }
+        if (key.isNotBlank()) viewModelScope.launch { draftStore.setFiles(key, next) }
+    }
+
     fun setDraft(text: String) {
         val key = _state.value.draftKey
         _state.update { it.copy(draft = text) }
@@ -682,11 +773,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun switchDraft(key: String) {
         val oldKey = _state.value.draftKey
         val oldText = _state.value.draft
+        val oldFiles = _state.value.attachments
         if (oldKey == key) return
         draftJob?.cancel()
-        _state.update { it.copy(draftKey = key, draft = "") }
+        _state.update { it.copy(draftKey = key, draft = "", attachments = emptyList()) }
         viewModelScope.launch {
-            if (oldKey.isNotBlank()) draftStore.set(oldKey, oldText)
+            if (oldKey.isNotBlank()) {
+                draftStore.set(oldKey, oldText)
+                draftStore.setFiles(oldKey, oldFiles)
+            }
+            val files = draftStore.getFiles(key)
+            if (_state.value.draftKey == key) _state.update { it.copy(attachments = files) }
             val local = draftStore.get(key)
             var text = local.text
             val remote = runCatching { api.draft(key) }.getOrNull()
@@ -728,6 +825,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             waiting = waiting || forms.isNotEmpty()
             _state.update { it.copy(forms = forms) }
         }
+        if (!waiting) {
+            notifiedWaiting.remove(id)
+            notifications.cancelWaiting(id)
+        }
         _state.update {
             it.copy(waitingIds = if (waiting) it.waitingIds + id else it.waitingIds - id)
         }
@@ -737,6 +838,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { api.replyPermission(request.sessionID.ifBlank { _state.value.selected?.id.orEmpty() }, request.id, decision) }
                 .onSuccess {
+                    notifiedWaiting.remove(request.sessionID)
+                    notifications.cancelWaiting(request.sessionID)
                     _state.update {
                         val rest = it.permissions.filterNot { item -> item.id == request.id }
                         val sid = request.sessionID.ifBlank { it.selected?.id.orEmpty() }
@@ -755,6 +858,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { api.replyForm(id, form.id, answer) }
                 .onSuccess {
+                    notifiedWaiting.remove(id)
+                    notifications.cancelWaiting(id)
                     _state.update {
                         val rest = it.forms.filterNot { item -> item.id == form.id }
                         it.copy(
@@ -772,6 +877,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching { api.cancelForm(id, form.id) }
                 .onSuccess {
+                    notifiedWaiting.remove(id)
+                    notifications.cancelWaiting(id)
                     _state.update {
                         val rest = it.forms.filterNot { item -> item.id == form.id }
                         it.copy(
@@ -856,6 +963,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (mime.isBlank()) mime = "application/octet-stream"
         return name to mime
+    }
+
+    private fun sessionTitle(id: String): String =
+        (_state.value.sessions.firstOrNull { it.id == id } ?: _state.value.children.firstOrNull { it.id == id })
+            ?.title?.takeIf { it.isNotBlank() } ?: "Чат"
+
+    private fun notifyWaiting(id: String) {
+        if (notifications.isForeground()) return
+        if (!notifiedWaiting.add(id)) return
+        notifications.waiting(sessionTitle(id), "Агент ждёт ответа", id)
+    }
+
+    private fun notifyDone(id: String) {
+        if (notifications.isForeground()) return
+        if (!notifiedDone.add(id)) return
+        notifications.done(sessionTitle(id), "Ход завершён", id)
     }
 
     private fun sessionExpired() {

@@ -168,9 +168,11 @@ class NitApi(
         id: String,
         text: String,
         files: List<UserFile> = emptyList(),
+        delivery: String? = null,
     ): String? = withContext(Dispatchers.IO) {
         val payload = buildJsonObject {
             put("text", text)
+            if (delivery == "queue" || delivery == "steer") put("delivery", delivery)
             if (files.isNotEmpty()) {
                 put(
                     "files",
@@ -230,6 +232,17 @@ class NitApi(
                 .build(),
         )
         Unit
+    }
+
+    suspend fun grammar(text: String): List<GrammarMatch> = withContext(Dispatchers.IO) {
+        val response = call(
+            Request.Builder()
+                .url(api("/api/grammar"))
+                .post(buildJsonObject { put("text", text) }.toString().toRequestBody(JSON))
+                .build(),
+        )
+        val root = json.parseToJsonElement(response.body?.string().orEmpty()).jsonObject
+        json.decodeFromJsonElement(root["matches"] ?: kotlinx.serialization.json.JsonArray(emptyList()))
     }
 
     suspend fun draft(key: String): DraftResponse = withContext(Dispatchers.IO) {
