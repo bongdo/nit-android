@@ -270,15 +270,6 @@ data class Variant(val id: String = "")
 data class UploadedFile(val path: String = "", val name: String = "", val size: Long = 0)
 
 @Serializable
-data class GrammarMatch(
-    val offset: Int = 0,
-    val length: Int = 0,
-    val message: String = "",
-    val ruleID: String = "",
-    val replacements: List<String> = emptyList(),
-)
-
-@Serializable
 data class DraftResponse(
     val text: String = "",
     val cleared: Boolean = false,
@@ -288,6 +279,7 @@ data class DraftResponse(
 @Serializable
 data class RemoteUiState(
     val hidden: List<String> = emptyList(),
+    val status: Map<String, String> = emptyMap(),
     val showHidden: Boolean = false,
 )
 

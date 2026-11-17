@@ -28,11 +28,12 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.PriorityHigh
 import androidx.compose.material.icons.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Memory
@@ -66,6 +67,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,8 +102,11 @@ fun SessionsSheet(
                     session.id.contains(query, ignoreCase = true))
         }
     }
-    val running = scoped.filter { state.runningIds.contains(it.id) }
-    val rest = scoped.filterNot { state.runningIds.contains(it.id) }
+    val waiting = scoped.filter { state.waitingIds.contains(it.id) }
+    val done = scoped.filter { state.status[it.id] == "done" && !state.waitingIds.contains(it.id) }
+    val running = scoped.filter { state.runningIds.contains(it.id) && !state.waitingIds.contains(it.id) && state.status[it.id] != "done" }
+    val hoisted = (waiting + done + running).map { it.id }.toSet()
+    val rest = scoped.filterNot { it.id in hoisted }
     val groups = remember(rest) { rest.groupBy { it.location.directory }.toList().sortedBy { it.first } }
     LaunchedEffect(query) {
         if (query.length < 2) return@LaunchedEffect
@@ -185,6 +190,34 @@ fun SessionsSheet(
                 )
             }
             LazyColumn(Modifier.weight(1f, fill = false)) {
+                if (waiting.isNotEmpty()) {
+                    item("waiting-head") { GroupHeader("Ждут ответа", waiting.size, Icons.Outlined.PriorityHigh, accent = true) }
+                    items(waiting, key = { "wait-${it.id}" }) { session ->
+                        SessionRow(
+                            session = session,
+                            running = state.runningIds.contains(session.id),
+                            selected = state.selected?.id == session.id,
+                            draft = state.drafts.contains(session.id),
+                            waiting = true,
+                            onClick = { onSelect(session.id) },
+                            accent = true,
+                        )
+                    }
+                }
+                if (done.isNotEmpty()) {
+                    item("done-head") { GroupHeader("Готовы", done.size, Icons.Outlined.Check, accent = true) }
+                    items(done, key = { "done-${it.id}" }) { session ->
+                        SessionRow(
+                            session = session,
+                            running = false,
+                            selected = state.selected?.id == session.id,
+                            draft = state.drafts.contains(session.id),
+                            waiting = false,
+                            onClick = { onSelect(session.id) },
+                            accent = true,
+                        )
+                    }
+                }
                 if (running.isNotEmpty()) {
                     item("running-head") { GroupHeader("Работают", running.size, Icons.Outlined.PlayArrow) }
                     items(running, key = { "run-${it.id}" }) { session ->
@@ -246,9 +279,21 @@ private fun ScopeTab(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun GroupHeader(label: String, count: Int, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+private fun GroupHeader(
+    label: String,
+    count: Int,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    accent: Boolean = false,
+) {
     Row(
-        Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 3.dp),
+        Modifier
+            .fillMaxWidth()
+            .background(
+                if (accent) Brush.horizontalGradient(
+                    listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f), androidx.compose.ui.graphics.Color.Transparent),
+                ) else Brush.horizontalGradient(listOf(androidx.compose.ui.graphics.Color.Transparent, androidx.compose.ui.graphics.Color.Transparent)),
+            )
+            .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
@@ -259,7 +304,15 @@ private fun GroupHeader(label: String, count: Int, icon: androidx.compose.ui.gra
 }
 
 @Composable
-private fun SessionRow(session: Session, running: Boolean, selected: Boolean, draft: Boolean, waiting: Boolean, onClick: () -> Unit) {
+private fun SessionRow(
+    session: Session,
+    running: Boolean,
+    selected: Boolean,
+    draft: Boolean,
+    waiting: Boolean,
+    onClick: () -> Unit,
+    accent: Boolean = false,
+) {
     val alpha = if (running) {
         val pulse = rememberInfiniteTransition(label = "running")
         val value by pulse.animateFloat(
@@ -276,7 +329,19 @@ private fun SessionRow(session: Session, running: Boolean, selected: Boolean, dr
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .background(if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else MaterialTheme.colorScheme.surface)
+            .background(
+                when {
+                    selected -> Brush.horizontalGradient(
+                        listOf(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
+                    )
+                    accent -> Brush.horizontalGradient(
+                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f), androidx.compose.ui.graphics.Color.Transparent),
+                    )
+                    else -> Brush.horizontalGradient(
+                        listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
+                    )
+                },
+            )
             .padding(horizontal = 18.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

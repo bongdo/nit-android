@@ -22,7 +22,6 @@ import space.bongdo.nit.data.DraftStore
 import space.bongdo.nit.data.EventStream
 import space.bongdo.nit.data.FolderListing
 import space.bongdo.nit.data.FormInfo
-import space.bongdo.nit.data.GrammarMatch
 import space.bongdo.nit.data.Message
 import space.bongdo.nit.data.MessageTime
 import space.bongdo.nit.data.Model
@@ -74,14 +73,11 @@ data class UiState(
     val hidden: Set<String> = emptySet(),
     val children: List<Session> = emptyList(),
     val waitingIds: Set<String> = emptySet(),
+    val status: Map<String, String> = emptyMap(),
     val draft: String = "",
     val draftKey: String = "",
     val drafts: Set<String> = emptySet(),
     val attachments: List<UserFile> = emptyList(),
-    val grammar: List<GrammarMatch> = emptyList(),
-    val grammarOpen: Boolean = false,
-    val grammarBusy: Boolean = false,
-    val grammarShift: Int = 0,
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -240,7 +236,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(phase = Phase.Ready, busy = false, loginError = null) }
         startStream()
         viewModelScope.launch {
-            runCatching { api.hiddenSessions() }.onSuccess { hidden -> _state.update { it.copy(hidden = hidden) } }
+            runCatching { api.uiState() }.onSuccess { ui ->
+                _state.update { it.copy(hidden = ui.hidden.toSet(), status = ui.status) }
+            }
         }
         refreshSessions()
         val pending = pendingSession
@@ -318,14 +316,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 notifiedWaiting.remove(sessionID)
                 notifiedDone.remove(sessionID)
                 notifications.cancelWaiting(sessionID)
-                _state.update { it.copy(runningIds = it.runningIds + sessionID) }
+                _state.update {
+                    it.copy(
+                        runningIds = it.runningIds + sessionID,
+                        status = it.status - sessionID,
+                    )
+                }
             }
             "session.idle",
             "session.execution.succeeded",
             "session.execution.failed",
             "session.execution.interrupted",
             -> {
-                _state.update { it.copy(runningIds = it.runningIds - sessionID) }
+                _state.update {
+                    it.copy(
+                        runningIds = it.runningIds - sessionID,
+                        status = it.status + (sessionID to if (event.type == "session.execution.failed" || event.type == "session.execution.interrupted") "failed" else "done"),
+                    )
+                }
                 notifiedWaiting.remove(sessionID)
                 notifyDone(sessionID)
                 if (sessionID == _state.value.selected?.id) {
@@ -361,6 +369,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     running = false,
                     runningIds = it.runningIds - sessionID,
                     waitingIds = it.waitingIds - sessionID,
+                    status = it.status - sessionID,
                 )
             }
         }
@@ -410,6 +419,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         _state.update { it.copy(searching = false, banner = error.message) }
                     }
                 }
+            runCatching { api.uiState() }.onSuccess { ui ->
+                _state.update { it.copy(hidden = ui.hidden.toSet(), status = ui.status) }
+            }
         }
     }
 
@@ -707,41 +719,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun backToParent() {
         val parent = _state.value.selected?.parentID ?: return
         openSession(parent)
-    }
-
-    fun checkGrammar() {
-        val text = _state.value.draft
-        if (text.isBlank()) {
-            note("Нечего проверять")
-            return
-        }
-        viewModelScope.launch {
-            _state.update { it.copy(grammarBusy = true) }
-            val trimmed = text.trim()
-            val shift = if (trimmed.isEmpty()) 0 else text.indexOf(trimmed).coerceAtLeast(0)
-            runCatching { api.grammar(trimmed) }
-                .onSuccess { matches ->
-                    _state.update { it.copy(grammar = matches, grammarBusy = false, grammarShift = shift) }
-                    if (matches.isEmpty()) note("Ошибок не найдено")
-                    else _state.update { it.copy(grammarOpen = true) }
-                }
-                .onFailure { error ->
-                    _state.update { it.copy(grammarBusy = false, banner = error.message) }
-                }
-        }
-    }
-
-    fun dismissGrammar() = _state.update { it.copy(grammarOpen = false) }
-
-    fun applyGrammar(match: GrammarMatch, replacement: String) {
-        val key = _state.value.draftKey
-        val text = _state.value.draft
-        val start = (match.offset + _state.value.grammarShift).coerceIn(0, text.length)
-        val end = (match.offset + _state.value.grammarShift + match.length).coerceIn(start, text.length)
-        if (start == end) return
-        val next = text.replaceRange(start, end, replacement)
-        setDraft(next)
-        _state.update { it.copy(grammar = emptyList(), grammarOpen = false) }
     }
 
     fun addAttachment(file: UserFile) {

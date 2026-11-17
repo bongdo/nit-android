@@ -234,17 +234,6 @@ class NitApi(
         Unit
     }
 
-    suspend fun grammar(text: String): List<GrammarMatch> = withContext(Dispatchers.IO) {
-        val response = call(
-            Request.Builder()
-                .url(api("/api/grammar"))
-                .post(buildJsonObject { put("text", text) }.toString().toRequestBody(JSON))
-                .build(),
-        )
-        val root = json.parseToJsonElement(response.body?.string().orEmpty()).jsonObject
-        json.decodeFromJsonElement(root["matches"] ?: kotlinx.serialization.json.JsonArray(emptyList()))
-    }
-
     suspend fun draft(key: String): DraftResponse = withContext(Dispatchers.IO) {
         val url = httpUrl("/api/ui/drafts").newBuilder().addQueryParameter("key", key).build()
         val response = call(Request.Builder().url(url).get().build())
@@ -261,12 +250,14 @@ class NitApi(
         )
     }
 
-    suspend fun hiddenSessions(): Set<String> = withContext(Dispatchers.IO) {
+    suspend fun uiState(): RemoteUiState = withContext(Dispatchers.IO) {
         val response = call(Request.Builder().url(api("/api/ui")).get().build())
         runCatching {
-            json.decodeFromString<RemoteUiState>(response.body?.string().orEmpty()).hidden.toSet()
-        }.getOrDefault(emptySet())
+            json.decodeFromString<RemoteUiState>(response.body?.string().orEmpty())
+        }.getOrDefault(RemoteUiState())
     }
+
+    suspend fun hiddenSessions(): Set<String> = uiState().hidden.toSet()
 
     suspend fun projects(): List<Project> = withContext(Dispatchers.IO) {
         val response = call(Request.Builder().url(api("/api/projects")).get().build())

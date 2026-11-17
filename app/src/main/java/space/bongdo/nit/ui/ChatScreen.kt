@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +21,9 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -52,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -68,12 +74,12 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     var pickerCreates by rememberSaveable { mutableStateOf(true) }
     var themeOpen by rememberSaveable { mutableStateOf(false) }
     var subagentsOpen by rememberSaveable { mutableStateOf(false) }
+    var topMenuOpen by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val focusManager = LocalFocusManager.current
     var focusRequest by remember { mutableStateOf(0) }
-    var dragged by remember { mutableStateOf(false) }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -101,6 +107,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         }
     }
 
+    val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val displayVersion = display.lastOrNull()?.content?.sumOf { it.text.length } ?: 0
     LaunchedEffect(display.size, displayVersion, state.running) {
         if (display.isNotEmpty() && atBottom) {
@@ -109,18 +116,36 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
 
     var userScrolled by remember { mutableStateOf(false) }
+    var userDragged by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
         launch {
             listState.interactionSource.interactions.collect { interaction ->
-                if (interaction is DragInteraction.Start) dragged = true
+                when (interaction) {
+                    is DragInteraction.Start -> {
+                        userScrolled = true
+                        userDragged = true
+                    }
+                    else -> Unit
+                }
             }
         }
-        snapshotFlow { listState.isScrollInProgress }
+        launch {
+            snapshotFlow { listState.isScrollInProgress to atBottom }
+                .distinctUntilChanged()
+                .collect { (scrolling, bottom) -> if (!scrolling && !bottom) userDragged = false }
+        }
+        var previousBottom = atBottom
+        snapshotFlow { atBottom }
             .distinctUntilChanged()
-            .collect { scrolling ->
-                if (!scrolling && dragged) {
-                    dragged = false
-                    if (atBottom) focusRequest += 1 else focusManager.clearFocus()
+            .collect { bottom ->
+                if (bottom != previousBottom) {
+                    if (!bottom) {
+                        if (userDragged) focusManager.clearFocus()
+                    } else if (userDragged) {
+                        userDragged = false
+                        focusRequest += 1
+                    }
+                    previousBottom = bottom
                 }
             }
     }
@@ -149,32 +174,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            ChatTopBar(
-                title = title,
-                directory = directory,
-                cost = state.selected?.cost ?: 0.0,
-                context = contextLabel(state),
-                connected = state.connected,
-                onMenu = {
-                    sessionsOpen = true
-                    viewModel.refreshSessions("")
-                    viewModel.loadProjects()
-                },
-                onMore = { settingsOpen = true },
-                onTheme = { themeOpen = true },
-                parent = state.selected?.parentID != null,
-                children = state.children.size,
-                runningChildren = state.children.count { it.id in state.runningIds },
-                onParent = viewModel::backToParent,
-                onSubagents = { subagentsOpen = true },
-                onNew = {
-                    pickerCreates = true
-                    pickerOpen = true
-                    viewModel.loadProjects()
-                },
-            )
-            state.banner?.let { Banner(it, viewModel::dismissBanner) }
+        Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (display.isEmpty()) {
                     EmptyChat(directory)
@@ -185,7 +185,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(
                             start = 12.dp,
                             end = 12.dp,
-                            top = 8.dp,
+                            top = topInset + 56.dp,
                             bottom = 16.dp,
                         ),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -263,7 +263,11 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     viewModel.send(text, state.attachments, delivery) { sent -> done(sent) }
                 },
                 onStop = viewModel::stop,
-                onGrammar = viewModel::checkGrammar,
+                onOpenChats = {
+                    sessionsOpen = true
+                    viewModel.refreshSessions("")
+                    viewModel.loadProjects()
+                },
                 onCommand = { command ->
                     when (command) {
                         "new" -> {
@@ -290,6 +294,71 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 )
             }
         }
+
+        Column(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .statusBarsPadding(),
+        ) {
+            ChatTopBar(
+                title = title,
+                directory = directory,
+                cost = state.selected?.cost ?: 0.0,
+                context = contextLabel(state),
+                connected = state.connected,
+                onMore = { settingsOpen = true },
+                parent = state.selected?.parentID != null,
+                children = state.children.size,
+                runningChildren = state.children.count { it.id in state.runningIds },
+                onParent = viewModel::backToParent,
+                onSubagents = { subagentsOpen = true },
+                onNew = {
+                    pickerCreates = true
+                    pickerOpen = true
+                    viewModel.loadProjects()
+                },
+                onSwipeDown = { topMenuOpen = true },
+            )
+            state.banner?.let { Banner(it, viewModel::dismissBanner) }
+        }
+    }
+
+    if (topMenuOpen) {
+        ChatMenuSheet(
+            hasChildren = state.children.isNotEmpty(),
+            hasParent = state.selected?.parentID != null,
+            onDismiss = { topMenuOpen = false },
+            onAction = { action ->
+                topMenuOpen = false
+                when (action) {
+                    "new" -> {
+                        pickerCreates = true
+                        pickerOpen = true
+                        viewModel.loadProjects()
+                    }
+                    "dir" -> {
+                        pickerCreates = false
+                        pickerOpen = true
+                        viewModel.loadProjects()
+                    }
+                    "settings" -> settingsOpen = true
+                    "theme" -> themeOpen = true
+                    "compact" -> viewModel.compactSession()
+                    "revert" -> viewModel.revertLast()
+                    "fork" -> viewModel.forkLastUser()
+                    "fork-here" -> viewModel.forkAt(null)
+                    "retry" -> viewModel.retryLast()
+                    "subagents" -> subagentsOpen = true
+                    "parent" -> viewModel.backToParent()
+                    "chats" -> {
+                        sessionsOpen = true
+                        viewModel.refreshSessions("")
+                        viewModel.loadProjects()
+                    }
+                }
+            },
+        )
     }
 
     if (sessionsOpen) {
@@ -318,13 +387,6 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 subagentsOpen = false
                 viewModel.openSubagent(child)
             },
-        )
-    }
-    if (state.grammarOpen) {
-        GrammarSheet(
-            matches = state.grammar,
-            onDismiss = viewModel::dismissGrammar,
-            onApply = viewModel::applyGrammar,
         )
     }
     if (themeOpen) {
@@ -373,27 +435,48 @@ private fun ChatTopBar(
     cost: Double,
     context: String,
     connected: Boolean,
-    onMenu: () -> Unit,
     onMore: () -> Unit,
     onNew: () -> Unit,
-    onTheme: () -> Unit,
     parent: Boolean,
     children: Int,
     runningChildren: Int,
     onParent: () -> Unit,
     onSubagents: () -> Unit,
+    onSwipeDown: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    var dragY by remember { mutableStateOf(0f) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.background,
+                        MaterialTheme.colorScheme.background.copy(alpha = 0.9f),
+                        androidx.compose.ui.graphics.Color.Transparent,
+                    ),
+                ),
+            )
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragStart = { dragY = 0f },
+                    onVerticalDrag = { change, amount -> dragY += amount; change.consume() },
+                    onDragEnd = {
+                        if (dragY > 56f) onSwipeDown()
+                        dragY = 0f
+                    },
+                    onDragCancel = { dragY = 0f },
+                )
+            }
+            .padding(bottom = 10.dp),
     ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
         if (parent) {
             IconButton(onClick = onParent) {
                 Icon(Icons.Outlined.ArrowBack, contentDescription = "к родителю", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else {
-            IconButton(onClick = onMenu) {
-                Icon(Icons.Outlined.Menu, contentDescription = "чаты", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Column(Modifier.weight(1f)) {
@@ -463,6 +546,7 @@ private fun ChatTopBar(
         }
         IconButton(onClick = onMore) {
             Icon(Icons.Outlined.MoreVert, contentDescription = "настройки", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         }
     }
 }

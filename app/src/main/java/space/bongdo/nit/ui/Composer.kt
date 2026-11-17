@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -32,7 +34,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowUpward
 import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
-import androidx.compose.material.icons.outlined.Spellcheck
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,7 +71,7 @@ fun Composer(
     onSend: (String, String?, (Boolean) -> Unit) -> Unit,
     onStop: () -> Unit,
     onCommand: (String) -> Unit,
-    onGrammar: () -> Unit,
+    onOpenChats: () -> Unit,
     focusRequest: Int = 0,
 ) {
     var attachOpen by rememberSaveable { mutableStateOf(false) }
@@ -108,6 +110,36 @@ fun Composer(
         modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding(),
     ) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
+            var dragTotal by remember { mutableStateOf(0f) }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(13.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragStart = { dragTotal = 0f },
+                            onVerticalDrag = { change, amount ->
+                                dragTotal += amount
+                                change.consume()
+                            },
+                            onDragEnd = {
+                                if (dragTotal < -36f) onOpenChats()
+                                dragTotal = 0f
+                            },
+                            onDragCancel = { dragTotal = 0f },
+                        )
+                    }
+                    .clickableNoRipple { onOpenChats() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    Modifier
+                        .width(40.dp)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+                )
+            }
             if (running) {
                 Row(
                     Modifier.padding(start = 4.dp, bottom = 4.dp),
@@ -202,14 +234,6 @@ fun Composer(
                         contentDescription = "прикрепить",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp),
-                    )
-                }
-                IconButton(onClick = onGrammar, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Outlined.Spellcheck,
-                        contentDescription = "грамматика",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
                     )
                 }
                 Box(Modifier.weight(1f).padding(vertical = 11.dp, horizontal = 2.dp)) {

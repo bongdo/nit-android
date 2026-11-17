@@ -64,9 +64,6 @@ class ApiContractTest {
                     )
                     path.endsWith("/api/agents") -> json("""{"data":[{"id":"build","name":"Build"}]}""")
                     path.contains("/upload") -> json("""{"path":"/work/out/f.png","name":"f.png","size":3}""")
-                    path.endsWith("/api/grammar") -> json(
-                        """{"matches":[{"offset":0,"length":2,"message":"Проверьте слово","ruleID":"TEST","replacements":["ok"]}]}""",
-                    )
                     path.endsWith("/api/ui") -> json("""{"hidden":["ses_9"],"showHidden":false}""")
                     else -> MockResponse().setResponseCode(404)
                 }
@@ -88,7 +85,6 @@ class ApiContractTest {
         assertEquals(1000L, api.models("/work")[0].limit?.context)
         assertEquals("build", api.agents()[0].id)
         assertEquals("ses_9", api.hiddenSessions().first())
-        assertEquals("ok", api.grammar("hi")[0].replacements.first())
 
         val temp = File.createTempFile("nit-test-", ".png")
         temp.writeBytes(byteArrayOf(1, 2, 3))
