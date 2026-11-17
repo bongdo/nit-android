@@ -1,5 +1,11 @@
 # nit-android: нативный клиент
 
+Статус на 2026-11-17: MVP собран. В приложении есть вход, список чатов,
+транскрипт со стримингом, markdown/таблицы/код/HTML-превью, вложения,
+разрешения и формы, смена модели/агента, темы. Роль ассистента и оверлей
+сознательно не входят в MVP; см. `decisions.md`. Реализация — один модуль
+`:app`, а не шесть модулей из плана ниже.
+
 Решение: Kotlin + Jetpack Compose, один `Activity`, чат — не WebView.
 Бэкенд — существующий nit-gui; Android не говорит с OpenCode напрямую и не
 хранит пароль OpenCode.
@@ -122,7 +128,7 @@ Reducer стрима — порт `web/src/lib/stream.ts`. Чтобы реали
 Варианты: x86_64 `nixos` (сейчас offline), GitHub Actions `ubuntu-latest`
 (в nita уже есть workflow), либо Termux-патч `aapt2` как костыль.
 
-`bin/check`: `./gradlew :app:assembleDebug testDebugUnitTest` + ktlint.
+`bin/check`: `./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`.
 Скриншоты — Roborazzi в JVM, без эмулятора.
 Выдача APK — через `drop` в nit-gui и установка по ссылке; Play не обязателен.
 

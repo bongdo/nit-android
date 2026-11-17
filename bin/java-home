@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+    echo "$JAVA_HOME"
+    exit 0
+fi
+if command -v java >/dev/null 2>&1; then
+    java=$(readlink -f "$(command -v java)")
+    dirname "$(dirname "$java")"
+    exit 0
+fi
+for candidate in /nix/store/*-openjdk-17*/bin/java; do
+    if [ -x "$candidate" ]; then
+        dirname "$(dirname "$candidate")"
+        exit 0
+    fi
+done
+echo "java-home: no JDK 17 found; set JAVA_HOME" >&2
+exit 1

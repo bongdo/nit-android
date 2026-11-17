@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+binary="$sdk/build-tools/35.0.0/aapt2"
+if [ ! -x "$binary" ]; then
+    echo "aapt2: not found at $binary" >&2
+    exit 1
+fi
+if [ "$(uname -m)" != "aarch64" ]; then
+    exec "$binary" "$@"
+fi
+
+qemu=$(ls -d /nix/store/*-qemu-*/bin/qemu-x86_64 2>/dev/null | head -n 1)
+glibc=""
+for candidate in /nix/store/*-glibc-x86_64-unknown-linux-gnu-*/; do
+    if [ -x "$candidate/lib/ld-linux-x86-64.so.2" ]; then
+        glibc="$candidate"
+        break
+    fi
+done
+libgcc=$(ls -d /nix/store/*-libgcc-x86_64-unknown-linux-gnu-*/lib 2>/dev/null | head -n 1)
+if [ -z "$qemu" ] || [ -z "$glibc" ] || [ -z "$libgcc" ]; then
+    echo "aapt2: qemu-x86_64 or an x86_64 glibc is missing from the nix store" >&2
+    exit 1
+fi
+
+exec "$qemu" -L "$glibc" -E "LD_LIBRARY_PATH=$libgcc" "$binary" "$@"

@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+export JAVA_HOME="$(bin/java-home)"
+export PATH="$JAVA_HOME/bin:$PATH"
+chmod +x tools/aapt2
+
+./gradlew --console=plain \
+    -Pandroid.aapt2FromMavenOverride="$PWD/tools/aapt2" \
+    testDebugUnitTest lintDebug assembleDebug
