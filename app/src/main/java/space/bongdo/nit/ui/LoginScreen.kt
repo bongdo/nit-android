@@ -46,7 +46,6 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
     var user by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
-    var showCode by remember { mutableStateOf(false) }
 
     fun submit() {
         if (state.busy) return
@@ -103,31 +102,18 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
                 label = "Пароль",
                 placeholder = "••••••••",
                 password = true,
-                ime = if (showCode) ImeAction.Next else ImeAction.Done,
+                ime = ImeAction.Next,
+            )
+            Spacer(Modifier.height(10.dp))
+            Field(
+                value = code,
+                onValueChange = { code = it },
+                label = "Код 2FA, если включён",
+                placeholder = "000000",
+                keyboard = KeyboardType.NumberPassword,
+                ime = ImeAction.Done,
                 onDone = ::submit,
             )
-            if (showCode) {
-                Spacer(Modifier.height(10.dp))
-                Field(
-                    value = code,
-                    onValueChange = { code = it },
-                    label = "Код из приложения",
-                    placeholder = "000000",
-                    keyboard = KeyboardType.NumberPassword,
-                    ime = ImeAction.Done,
-                    onDone = ::submit,
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
-                TextButton(onClick = { showCode = !showCode }) {
-                    Text(
-                        if (showCode) "без кода" else "есть код 2FA",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
 
             state.loginError?.let { error ->
                 Text(
