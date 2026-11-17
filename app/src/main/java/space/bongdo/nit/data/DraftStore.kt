@@ -20,7 +20,9 @@ class DraftStore(private val context: Context) {
 
     val keys: Flow<Set<String>> = context.draftData.data.map { prefs ->
         prefs.asMap().keys.mapNotNull { key ->
-            key.name.takeIf { it.startsWith(prefix) && !it.endsWith(".updated") }
+            key.name.takeIf {
+                it.startsWith(prefix) && !it.endsWith(".updated") && !it.endsWith(".files")
+            }
                 ?.removePrefix(prefix)
                 ?.takeIf { prefs[stringPreferencesKey(it)]?.isNotBlank() == true }
         }.toSet()
