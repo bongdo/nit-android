@@ -375,7 +375,11 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     onGrab = { dockJob?.cancel() },
                     onSettle = { open -> animateDock(if (open) 1f else 0f) },
                     onToggle = { if (dockProgress > 0.5f) closeDock() else openDock() },
-                    onClose = { closeDock() },
+                    onClose = {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                        closeDock()
+                    },
                     collapsed = {
                         if (state.permissions.isNotEmpty()) {
                             PermissionStrip(state.permissions, viewModel::replyPermission)
@@ -466,9 +470,18 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 connected = state.healthOk && state.streamStatus == StreamStatus.Online,
                 connecting = state.streamStatus == StreamStatus.Connecting,
                 parent = state.selected?.parentID != null,
-                onParent = viewModel::backToParent,
-                onNew = { newChat() },
-                onSwipeDown = { topMenuOpen = true },
+                onParent = {
+                    closeDock()
+                    viewModel.backToParent()
+                },
+                onNew = {
+                    closeDock()
+                    newChat()
+                },
+                onSwipeDown = {
+                    closeDock()
+                    topMenuOpen = true
+                },
             )
             if (!state.healthOk) {
                 Banner("Нет связи с сервером. Повторяем…", viewModel::retryConnection, action = "повторить")

@@ -942,6 +942,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ?: cachedSessions.firstOrNull { it.id == id }
 
         suspend fun select(session: Session) {
+            if (_state.value.status[id] != null) {
+                _state.update { it.copy(status = it.status - id) }
+                runCatching { api.setSessionStatus(id, "") }
+            }
             _state.update { state ->
                 val same = state.selected?.id == id
                 state.copy(
