@@ -39,6 +39,28 @@ class DisplayMessagesTest {
     }
 
     @Test
+    fun keepsCompactionAndShellRows() {
+        val compact = Message(id = "c1", type = "compaction", time = MessageTime(created = 1), summary = "old")
+        val shell = Message(id = "s1", type = "shell", time = MessageTime(created = 2), command = "ls")
+        val display = displayMessages(listOf(assistant("a1", "hi"), compact, shell), running = false)
+        assertEquals(listOf("a1", "c1", "s1"), display.map { it.id })
+    }
+
+    @Test
+    fun keepsFailedIdleButDropsEmptyIdle() {
+        val failed = Message(
+            id = "i1",
+            type = "idle",
+            time = MessageTime(created = 1),
+            error = space.bongdo.nit.data.MessageError(message = "boom"),
+        )
+        val empty = Message(id = "i2", type = "idle", time = MessageTime(created = 2))
+        val display = displayMessages(listOf(assistant("a1", "hi"), failed, empty), running = false)
+        assertEquals(2, display.size)
+        assertEquals("i1", display[1].id)
+    }
+
+    @Test
     fun keepsUserAndGroupsFollowingAssistant() {
         val user = Message(id = "u1", type = "user", time = MessageTime(created = 1), text = "hi")
         val display = displayMessages(

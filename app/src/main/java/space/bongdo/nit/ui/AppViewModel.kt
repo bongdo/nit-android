@@ -5,6 +5,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
+import coil.request.ImageRequest
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -74,6 +75,8 @@ data class UiState(
     val children: List<Session> = emptyList(),
     val waitingIds: Set<String> = emptySet(),
     val status: Map<String, String> = emptyMap(),
+    val compacting: Boolean = false,
+    val loadingMessages: Boolean = false,
     val draft: String = "",
     val draftKey: String = "",
     val drafts: Set<String> = emptySet(),
@@ -323,15 +326,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
+            "session.compaction.started" -> {
+                if (sessionID == _state.value.selected?.id) _state.update { it.copy(compacting = true) }
+            }
+            "session.compaction.ended", "session.compaction.failed" -> {
+                if (sessionID == _state.value.selected?.id) {
+                    _state.update { it.copy(compacting = false) }
+                    viewModelScope.launch { reloadMessages(sessionID) }
+                    if (event.type == "session.compaction.failed") {
+                        _state.update { it.copy(banner = "не удалось сжать контекст") }
+                    }
+                }
+                scheduleSessionsRefresh()
+            }
             "session.idle",
             "session.execution.succeeded",
             "session.execution.failed",
             "session.execution.interrupted",
             -> {
                 _state.update {
+                    val status = when {
+                        event.type == "session.execution.failed" -> "failed"
+                        event.type == "session.execution.interrupted" -> null
+                        it.status[sessionID] == "failed" -> "failed"
+                        else -> "done"
+                    }
                     it.copy(
                         runningIds = it.runningIds - sessionID,
-                        status = it.status + (sessionID to if (event.type == "session.execution.failed" || event.type == "session.execution.interrupted") "failed" else "done"),
+                        status = if (status == null) it.status else it.status + (sessionID to status),
+                        compacting = it.compacting && sessionID != it.selected?.id,
                     )
                 }
                 notifiedWaiting.remove(sessionID)
@@ -435,7 +458,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(banner = error.message) }
                 _state.value.sessions.firstOrNull { it.id == id }
             } ?: return@launch
-            _state.update { it.copy(selected = session, messages = emptyList(), previous = null, children = emptyList()) }
+            _state.update {
+                it.copy(
+                    selected = session,
+                    messages = emptyList(),
+                    previous = null,
+                    children = emptyList(),
+                    compacting = false,
+                    loadingMessages = true,
+                )
+            }
             switchDraft(id)
             settingsStore.update { it.copy(lastSession = id) }
             reloadMessages(id)
@@ -454,10 +486,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         messages = page.data,
                         previous = page.previous,
                         running = it.runningIds.contains(id),
+                        loadingMessages = false,
                     )
                 }
             }
             .onFailure { error ->
+                _state.update { it.copy(loadingMessages = false) }
                 if (error is UnauthorizedException) sessionExpired()
                 else _state.update { it.copy(banner = error.message) }
             }
@@ -549,7 +583,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     _state.update { it.copy(attachments = emptyList()) }
                 }
                 if (_state.value.draftKey == sentKey) {
-                    if (_state.value.draft == body) {
+                    if (_state.value.draft.trim() == body) {
                         _state.update { it.copy(draft = "") }
                     } else {
                         draftStore.set(sentKey, _state.value.draft)
@@ -648,10 +682,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun compactSession() {
         val id = _state.value.selected?.id ?: return
+        _state.update { it.copy(compacting = true) }
         viewModelScope.launch {
             runCatching { api.compact(id) }
                 .onSuccess { refreshSessions() }
-                .onFailure { error -> _state.update { it.copy(banner = error.message) } }
+                .onFailure { error ->
+                    _state.update { it.copy(compacting = false, banner = error.message) }
+                }
         }
     }
 
@@ -917,13 +954,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     resolver.openInputStream(uri)?.use { input ->
                         temp.outputStream().use { output -> input.copyTo(output) }
                     } ?: throw ApiException("не удалось прочитать файл")
-                    api.upload(temp, meta.first, directory, meta.second)
+                    api.upload(temp, meta.first, directory, meta.second) to meta.second
                 } finally {
                     temp.delete()
                 }
             }
-                .onSuccess { uploaded ->
-                    onDone(UserFile(uri = "file://${uploaded.path}", name = uploaded.name, bytes = uploaded.size))
+                .onSuccess { (uploaded, mime) ->
+                    onDone(
+                        UserFile(
+                            uri = "file://${uploaded.path}",
+                            name = uploaded.name,
+                            mime = mime,
+                            bytes = uploaded.size,
+                        ),
+                    )
                 }
                 .onFailure { error -> _state.update { it.copy(banner = error.message) } }
         }
@@ -942,6 +986,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return name to mime
     }
 
+    fun imageModel(file: UserFile): Any? {
+        val name = file.name.orEmpty()
+        val image = file.mime?.startsWith("image/") == true ||
+            name.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
+        if (!image) return null
+        val raw = file.uri ?: return null
+        val url = api.mediaUrl(normalizePreviewPath(raw))
+        val model = ImageRequest.Builder(getApplication()).data(url).crossfade(true)
+        val cookie = api.cookieHeader(url)
+        if (cookie.isNotBlank()) model.addHeader("Cookie", cookie)
+        return model.build()
+    }
+
     private fun sessionTitle(id: String): String =
         (_state.value.sessions.firstOrNull { it.id == id } ?: _state.value.children.firstOrNull { it.id == id })
             ?.title?.takeIf { it.isNotBlank() } ?: "Чат"
@@ -957,6 +1014,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (!notifiedDone.add(id)) return
         notifications.done(sessionTitle(id), "Ход завершён", id)
     }
+
+    private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif", "svg")
 
     private fun sessionExpired() {
         streamJob?.cancel()

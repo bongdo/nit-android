@@ -141,6 +141,9 @@ data class EditedFile(
 )
 
 @Serializable
+data class ShellOutput(val output: String = "", val truncated: Boolean? = null)
+
+@Serializable
 data class Message(
     val id: String,
     val type: String = "",
@@ -158,6 +161,7 @@ data class Message(
     val finish: String? = null,
     val command: String? = null,
     val status: String? = null,
+    val output: ShellOutput? = null,
     val exit: JsonElement? = null,
     val steps: Int? = null,
     val tools: Int? = null,

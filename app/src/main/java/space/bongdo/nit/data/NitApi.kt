@@ -324,6 +324,15 @@ class NitApi(
         call(Request.Builder().url(url).get().build()).use { it.body?.bytes() ?: ByteArray(0) }
     }
 
+    fun mediaUrl(path: String): String {
+        val endpoint = if (path.startsWith("/tmp/nit-gui-")) "/api/file" else "/api/view"
+        return httpUrl(endpoint).newBuilder().addQueryParameter("path", path).build().toString()
+    }
+
+    fun cookieHeader(url: String): String = runCatching {
+        jar.loadForRequest(url.toHttpUrl()).joinToString("; ") { "${it.name}=${it.value}" }
+    }.getOrDefault("")
+
     suspend fun uploadedBytes(path: String): ByteArray = withContext(Dispatchers.IO) {
         val url = httpUrl("/api/file").newBuilder().addQueryParameter("path", path).build()
         call(Request.Builder().url(url).get().build()).use { it.body?.bytes() ?: ByteArray(0) }

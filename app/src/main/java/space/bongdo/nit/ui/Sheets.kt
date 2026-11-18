@@ -36,6 +36,7 @@ import androidx.compose.material.icons.outlined.PriorityHigh
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
@@ -90,7 +91,7 @@ fun SessionsSheet(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var allDirectories by rememberSaveable { mutableStateOf(true) }
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val selectedDirectory = state.selected?.location?.directory ?: state.settings.lastDirectory
     val scoped = remember(state.sessions, state.hidden, query, allDirectories, selectedDirectory) {
         state.sessions.filter { session ->
@@ -104,8 +105,11 @@ fun SessionsSheet(
     }
     val waiting = scoped.filter { state.waitingIds.contains(it.id) }
     val done = scoped.filter { state.status[it.id] == "done" && !state.waitingIds.contains(it.id) }
-    val running = scoped.filter { state.runningIds.contains(it.id) && !state.waitingIds.contains(it.id) && state.status[it.id] != "done" }
-    val hoisted = (waiting + done + running).map { it.id }.toSet()
+    val failed = scoped.filter { state.status[it.id] == "failed" && !state.waitingIds.contains(it.id) }
+    val running = scoped.filter {
+        state.runningIds.contains(it.id) && !state.waitingIds.contains(it.id) && state.status[it.id] == null
+    }
+    val hoisted = (waiting + done + failed + running).map { it.id }.toSet()
     val rest = scoped.filterNot { it.id in hoisted }
     val groups = remember(rest) { rest.groupBy { it.location.directory }.toList().sortedBy { it.first } }
     LaunchedEffect(query) {
@@ -218,6 +222,21 @@ fun SessionsSheet(
                         )
                     }
                 }
+                if (failed.isNotEmpty()) {
+                    item("failed-head") { GroupHeader("С ошибкой", failed.size, Icons.Outlined.ErrorOutline, accent = true) }
+                    items(failed, key = { "failed-${it.id}" }) { session ->
+                        SessionRow(
+                            session = session,
+                            running = false,
+                            selected = state.selected?.id == session.id,
+                            draft = state.drafts.contains(session.id),
+                            waiting = false,
+                            onClick = { onSelect(session.id) },
+                            accent = true,
+                            failed = true,
+                        )
+                    }
+                }
                 if (running.isNotEmpty()) {
                     item("running-head") { GroupHeader("Работают", running.size, Icons.Outlined.PlayArrow) }
                     items(running, key = { "run-${it.id}" }) { session ->
@@ -312,6 +331,7 @@ private fun SessionRow(
     waiting: Boolean,
     onClick: () -> Unit,
     accent: Boolean = false,
+    failed: Boolean = false,
 ) {
     val alpha = if (running) {
         val pulse = rememberInfiniteTransition(label = "running")
@@ -350,8 +370,11 @@ private fun SessionRow(
                 .size(if (running) 7.dp else 4.dp)
                 .clip(CircleShape)
                 .background(
-                    if (running) MaterialTheme.colorScheme.tertiary.copy(alpha = alpha)
-                    else MaterialTheme.colorScheme.outlineVariant,
+                    when {
+                        running -> MaterialTheme.colorScheme.tertiary.copy(alpha = alpha)
+                        failed -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.outlineVariant
+                    },
                 ),
         )
         if (waiting) {

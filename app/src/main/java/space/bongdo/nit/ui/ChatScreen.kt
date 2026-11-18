@@ -17,10 +17,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
@@ -34,9 +32,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
-import androidx.compose.material.icons.outlined.AccountTree
-import androidx.compose.material.icons.outlined.Menu
-import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,6 +39,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,7 +73,6 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var pickerCreates by rememberSaveable { mutableStateOf(true) }
     var themeOpen by rememberSaveable { mutableStateOf(false) }
-    var subagentsOpen by rememberSaveable { mutableStateOf(false) }
     var topMenuOpen by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -100,19 +99,31 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     val display = remember(state.messages, state.running) { displayMessages(state.messages, state.running) }
     val questionForm = state.forms.firstOrNull { it.isQuestionForm() }
     val otherForms = state.forms.filterNot { it.isQuestionForm() }
-    val atBottom by remember {
-        derivedStateOf {
-            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            last >= listState.layoutInfo.totalItemsCount - 2
-        }
-    }
+    val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    var stick by remember { mutableStateOf(true) }
 
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val displayVersion = display.lastOrNull()?.content?.sumOf { it.text.length } ?: 0
-    LaunchedEffect(display.size, displayVersion, state.running) {
-        if (display.isNotEmpty() && atBottom) {
-            listState.scrollToItem(display.lastIndex)
+    LaunchedEffect(display.size, displayVersion, state.running, state.compacting) {
+        val total = listState.layoutInfo.totalItemsCount
+        if ((display.isNotEmpty() || state.compacting) && stick && total > 0) {
+            listState.scrollToItem(total - 1, Int.MAX_VALUE)
         }
+    }
+    LaunchedEffect(state.selected?.id) {
+        stick = true
+        val total = listState.layoutInfo.totalItemsCount
+        if (total > 0) listState.scrollToItem(total - 1, Int.MAX_VALUE)
+    }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.canScrollForward }
+            .distinctUntilChanged()
+            .collect { forward ->
+                val total = listState.layoutInfo.totalItemsCount
+                if (forward && stick && total > 0) {
+                    listState.scrollToItem(total - 1, Int.MAX_VALUE)
+                }
+            }
     }
 
     var userScrolled by remember { mutableStateOf(false) }
@@ -124,6 +135,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     is DragInteraction.Start -> {
                         userScrolled = true
                         userDragged = true
+                        stick = false
                     }
                     else -> Unit
                 }
@@ -141,9 +153,12 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 if (bottom != previousBottom) {
                     if (!bottom) {
                         if (userDragged) focusManager.clearFocus()
-                    } else if (userDragged) {
-                        userDragged = false
-                        focusRequest += 1
+                    } else {
+                        stick = true
+                        if (userDragged) {
+                            userDragged = false
+                            focusRequest += 1
+                        }
                     }
                     previousBottom = bottom
                 }
@@ -157,7 +172,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             .collect { (scrolling, index) ->
                 if (scrolling) userScrolled = true
                 val snapshot = viewModel.state.value
-                if (userScrolled && index <= 1 && snapshot.previous != null && !snapshot.loadingOlder) {
+                if (userDragged && index <= 1 && snapshot.previous != null && !snapshot.loadingOlder) {
                     anchorId = snapshot.messages.getOrNull(listState.firstVisibleItemIndex)?.id
                     anchorOffset = listState.firstVisibleItemScrollOffset
                     viewModel.loadOlder()
@@ -177,7 +192,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (display.isEmpty()) {
-                    EmptyChat(directory)
+                    if (state.loadingMessages) ChatSkeleton() else EmptyChat(directory)
                 } else {
                     LazyColumn(
                         state = listState,
@@ -205,6 +220,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                             MessageItem(
                                 message = message,
                                 running = state.running && message.id == lastAssistant,
+                                imageModel = viewModel::imageModel,
                                 onOpenHtml = { source, title -> viewModel.openHtml(source, title) },
                                 onOpenArtifact = { path, title -> viewModel.openArtifact(path, title) },
                                 onOpenFile = { path, title -> viewModel.openFile(path, title) },
@@ -213,11 +229,21 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                         if (state.running && display.lastOrNull()?.type == "user") {
                             item("typing") { TypingLine() }
                         }
+                        if (state.compacting && display.lastOrNull()?.type != "compaction") {
+                            item("compacting") { CompactionBusyLine() }
+                        }
                     }
                     if (!atBottom && display.isNotEmpty()) {
                         FloatingActionButton(
                             onClick = {
-                                scope.launch { listState.animateScrollToItem(display.lastIndex) }
+                                stick = true
+                                scope.launch {
+                                    val total = listState.layoutInfo.totalItemsCount
+                                    if (total > 0) {
+                                        listState.animateScrollToItem(total - 1)
+                                        listState.scrollToItem(total - 1, Int.MAX_VALUE)
+                                    }
+                                }
                             },
                             modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp).size(42.dp),
                             shape = CircleShape,
@@ -254,12 +280,14 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 running = state.running,
                 busy = state.busy,
                 attachments = state.attachments,
+                imageModel = viewModel::imageModel,
                 focusRequest = focusRequest,
                 onAttach = { uri, name ->
                     viewModel.upload(uri) { file -> viewModel.addAttachment(file.copy(name = name ?: file.name)) }
                 },
                 onRemove = viewModel::removeAttachment,
                 onSend = { text, delivery, done ->
+                    stick = true
                     viewModel.send(text, state.attachments, delivery) { sent -> done(sent) }
                 },
                 onStop = viewModel::stop,
@@ -298,21 +326,23 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         Column(
             Modifier
                 .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .statusBarsPadding(),
+                .fillMaxWidth(),
         ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(topInset)
+                    .background(MaterialTheme.colorScheme.background),
+            )
             ChatTopBar(
                 title = title,
                 directory = directory,
                 cost = state.selected?.cost ?: 0.0,
-                context = contextLabel(state),
+                context = contextPercent(state).takeIf { it > 0 }?.let { "ctx $it%" } ?: "",
+                contextProgress = contextPercent(state) / 100f,
                 connected = state.connected,
-                onMore = { settingsOpen = true },
                 parent = state.selected?.parentID != null,
-                children = state.children.size,
-                runningChildren = state.children.count { it.id in state.runningIds },
                 onParent = viewModel::backToParent,
-                onSubagents = { subagentsOpen = true },
                 onNew = {
                     pickerCreates = true
                     pickerOpen = true
@@ -326,9 +356,14 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
 
     if (topMenuOpen) {
         ChatMenuSheet(
-            hasChildren = state.children.isNotEmpty(),
             hasParent = state.selected?.parentID != null,
+            children = state.children,
+            runningIds = state.runningIds,
             onDismiss = { topMenuOpen = false },
+            onOpenSubagent = { child ->
+                topMenuOpen = false
+                viewModel.openSubagent(child)
+            },
             onAction = { action ->
                 topMenuOpen = false
                 when (action) {
@@ -349,7 +384,6 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     "fork" -> viewModel.forkLastUser()
                     "fork-here" -> viewModel.forkAt(null)
                     "retry" -> viewModel.retryLast()
-                    "subagents" -> subagentsOpen = true
                     "parent" -> viewModel.backToParent()
                     "chats" -> {
                         sessionsOpen = true
@@ -375,17 +409,6 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 pickerCreates = true
                 pickerOpen = true
                 viewModel.loadProjects()
-            },
-        )
-    }
-    if (subagentsOpen) {
-        SubagentSheet(
-            children = state.children,
-            runningIds = state.runningIds,
-            onDismiss = { subagentsOpen = false },
-            onOpen = { child ->
-                subagentsOpen = false
-                viewModel.openSubagent(child)
             },
         )
     }
@@ -434,14 +457,11 @@ private fun ChatTopBar(
     directory: String,
     cost: Double,
     context: String,
+    contextProgress: Float,
     connected: Boolean,
-    onMore: () -> Unit,
     onNew: () -> Unit,
     parent: Boolean,
-    children: Int,
-    runningChildren: Int,
     onParent: () -> Unit,
-    onSubagents: () -> Unit,
     onSwipeDown: () -> Unit,
 ) {
     var dragY by remember { mutableStateOf(0f) }
@@ -506,6 +526,14 @@ private fun ChatTopBar(
                 }
                 if (context.isNotBlank()) {
                     Text(context, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(5.dp))
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { contextProgress.coerceIn(0f, 1f) },
+                        modifier = Modifier.width(34.dp).height(3.dp),
+                        color = if (contextProgress > 0.8f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                        strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    )
                 }
                 if (cost > 0) {
                     Text(
@@ -528,40 +556,46 @@ private fun ChatTopBar(
                 .clip(CircleShape)
                 .background(if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline),
         )
-        if (children > 0) {
-            Box(contentAlignment = Alignment.Center) {
-                IconButton(onClick = onSubagents) {
-                    Icon(Icons.Outlined.AccountTree, contentDescription = "субагенты", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Text(
-                    if (runningChildren > 0) "$children·$runningChildren" else "$children",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.align(Alignment.TopEnd).padding(top = 2.dp, end = 2.dp),
-                )
-            }
-        }
         IconButton(onClick = onNew) {
             Icon(Icons.Outlined.Add, contentDescription = "новый чат", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconButton(onClick = onMore) {
-            Icon(Icons.Outlined.MoreVert, contentDescription = "настройки", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         }
     }
 }
 
-private fun contextLabel(state: UiState): String {
+private fun contextPercent(state: UiState): Int {
     val last = state.messages.lastOrNull { it.type == "assistant" }
-    val tokens = last?.tokens ?: state.selected?.tokens ?: return ""
-    val used = (tokens.input ?: 0) + (tokens.cache?.read ?: 0)
+    val tokens = last?.tokens ?: state.selected?.tokens ?: return 0
+    val used = (tokens.input ?: 0) + (tokens.output ?: 0) + (tokens.cache?.read ?: 0)
     val model = state.models.firstOrNull {
         it.id == state.selected?.model?.id && it.providerID == state.selected?.model?.providerID
     }
     val limit = model?.limit?.context ?: 0
-    if (limit <= 0 || used <= 0) return ""
-    val percent = ((used * 100) / limit).coerceIn(0, 100)
-    return "ctx $percent%"
+    if (limit <= 0 || used <= 0) return 0
+    return ((used * 100) / limit).toInt().coerceIn(0, 100)
+}
+
+@Composable
+private fun ChatSkeleton() {
+    val phase = rememberInfiniteTransition(label = "skeleton")
+    val alpha by phase.animateFloat(
+        initialValue = 0.25f,
+        targetValue = 0.6f,
+        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+        label = "skeleton-alpha",
+    )
+    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 90.dp)) {
+        repeat(3) { index ->
+            Box(
+                Modifier
+                    .fillMaxWidth(if (index == 1) 0.72f else 0.9f)
+                    .height(if (index == 1) 54.dp else 38.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = alpha)),
+            )
+            Spacer(Modifier.height(14.dp))
+        }
+    }
 }
 
 @Composable

@@ -50,12 +50,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import space.bongdo.nit.data.UserFile
 
 @Composable
@@ -66,6 +69,7 @@ fun Composer(
     running: Boolean,
     busy: Boolean,
     attachments: List<UserFile>,
+    imageModel: (UserFile) -> Any?,
     onAttach: (Uri, String?) -> Unit,
     onRemove: (UserFile) -> Unit,
     onSend: (String, String?, (Boolean) -> Unit) -> Unit,
@@ -111,22 +115,29 @@ fun Composer(
     ) {
         Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
             var dragTotal by remember { mutableStateOf(0f) }
+            var dragLift by remember { mutableStateOf(0f) }
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(13.dp)
+                    .height(16.dp)
+                    .graphicsLayer { translationY = dragLift }
                     .pointerInput(Unit) {
                         detectVerticalDragGestures(
                             onDragStart = { dragTotal = 0f },
                             onVerticalDrag = { change, amount ->
                                 dragTotal += amount
+                                dragLift = (dragLift + amount).coerceIn(-64f, 0f)
                                 change.consume()
                             },
                             onDragEnd = {
-                                if (dragTotal < -36f) onOpenChats()
+                                dragLift = 0f
+                                if (dragTotal < -32f) onOpenChats()
                                 dragTotal = 0f
                             },
-                            onDragCancel = { dragTotal = 0f },
+                            onDragCancel = {
+                                dragLift = 0f
+                                dragTotal = 0f
+                            },
                         )
                     }
                     .clickableNoRipple { onOpenChats() },
@@ -193,12 +204,24 @@ fun Composer(
                                 .padding(start = 7.dp, top = 5.dp, bottom = 5.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Icon(
-                                fileIconFor(item.name),
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(14.dp),
-                            )
+                            val model = imageModel(item)
+                            if (model != null) {
+                                AsyncImage(
+                                    model = model,
+                                    contentDescription = item.name,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(RoundedCornerShape(5.dp)),
+                                )
+                            } else {
+                                Icon(
+                                    fileIconFor(item.name),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
                             Spacer(Modifier.width(5.dp))
                             Text(
                                 item.name ?: "файл",
