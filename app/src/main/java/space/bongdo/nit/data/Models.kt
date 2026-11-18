@@ -285,6 +285,8 @@ data class RemoteUiState(
     val hidden: List<String> = emptyList(),
     val status: Map<String, String> = emptyMap(),
     val showHidden: Boolean = false,
+    val model: ModelRef? = null,
+    val agent: String? = null,
 )
 
 @Serializable

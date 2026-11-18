@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import space.bongdo.nit.data.NitApi
+import space.bongdo.nit.data.ModelRef
 import space.bongdo.nit.data.PersistentCookieJar
 import space.bongdo.nit.data.UserFile
 import space.bongdo.nit.data.parseServer
@@ -23,6 +24,13 @@ class ApiContractTest {
     private fun json(body: String) = MockResponse()
         .setHeader("Content-Type", "application/json")
         .setBody(body)
+
+    private fun takeUntil(match: (RecordedRequest) -> Boolean): RecordedRequest {
+        while (true) {
+            val request = server.takeRequest()
+            if (match(request)) return request
+        }
+    }
 
     @After
     fun tearDown() {
@@ -41,6 +49,11 @@ class ApiContractTest {
                         .addHeader("Set-Cookie", "gate_session=abc; Path=/; HttpOnly")
                         .addHeader("Set-Cookie", "nit_gate=def; Path=/; HttpOnly; Max-Age=604800")
                     path.endsWith("/api/health") -> json("""{"ok":true}""")
+                    path.endsWith("/api/sessions") && request.method == "POST" -> json(
+                        """{"data":{"id":"ses_2","title":"New","location":{"directory":"/work"},"time":{"created":3,"updated":3}}}""",
+                    )
+                    path.endsWith("/api/sessions/ses_1") && request.method == "DELETE" ->
+                        MockResponse().setResponseCode(204)
                     path.endsWith("/api/sessions") -> json(
                         """{"data":[{"id":"ses_1","title":"T","location":{"directory":"/work"},"time":{"created":1,"updated":2}}],"cursor":{"next":null}}""",
                     )
@@ -107,5 +120,20 @@ class ApiContractTest {
                 break
             }
         }
+
+        val created = api.createSession("/work", agent = "build", model = ModelRef("m", "p"))
+        assertEquals("ses_2", created.id)
+        val create = takeUntil { it.method == "POST" && it.path == "/nit/api/sessions" }
+        val createBody = create.body.readUtf8()
+        assertTrue(createBody.contains("\"agent\":\"build\""))
+        assertTrue(createBody.contains("\"model\""))
+
+        api.prompt("ses_1", "again", messageID = "msg_user")
+        val retried = takeUntil { it.path?.contains("/prompt") == true }
+        assertTrue(retried.body.readUtf8().contains("\"id\":\"msg_user\""))
+
+        api.deleteSession("ses_1")
+        val deleted = takeUntil { it.method == "DELETE" }
+        assertEquals("/nit/api/sessions/ses_1", deleted.path)
     }
 }

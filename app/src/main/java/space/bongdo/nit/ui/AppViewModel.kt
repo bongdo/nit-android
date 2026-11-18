@@ -8,14 +8,23 @@ import androidx.lifecycle.AndroidViewModel
 import coil.request.ImageRequest
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.doubleOrNull
 import space.bongdo.nit.data.Agent
 import space.bongdo.nit.data.ApiException
 import space.bongdo.nit.data.AppSettings
@@ -23,21 +32,30 @@ import space.bongdo.nit.data.DraftStore
 import space.bongdo.nit.data.EventStream
 import space.bongdo.nit.data.FolderListing
 import space.bongdo.nit.data.FormInfo
+import space.bongdo.nit.data.MAX_RETRY_ATTEMPTS
 import space.bongdo.nit.data.Message
+import space.bongdo.nit.data.MessageMerge
 import space.bongdo.nit.data.MessageTime
 import space.bongdo.nit.data.Model
 import space.bongdo.nit.data.ModelRef
 import space.bongdo.nit.data.NitApi
 import space.bongdo.nit.data.PermissionRequest
 import space.bongdo.nit.data.Project
+import space.bongdo.nit.data.RetryPlan
 import space.bongdo.nit.data.SecureStore
 import space.bongdo.nit.data.ServerAddress
 import space.bongdo.nit.data.Session
 import space.bongdo.nit.data.SettingsStore
 import space.bongdo.nit.data.StreamEvent
 import space.bongdo.nit.data.StreamReducer
+import space.bongdo.nit.data.Tokens
 import space.bongdo.nit.data.UnauthorizedException
 import space.bongdo.nit.data.UserFile
+import space.bongdo.nit.data.errorOf
+import space.bongdo.nit.data.mergeRunning
+import space.bongdo.nit.data.retryDelay
+import space.bongdo.nit.data.retryPlan
+import space.bongdo.nit.data.running
 import space.bongdo.nit.NotificationHelper
 import space.bongdo.nit.PreviewActivity
 import space.bongdo.nit.data.parseServer
@@ -49,6 +67,8 @@ import java.io.File
 
 enum class Phase { Loading, Login, Ready }
 
+enum class StreamStatus { Connecting, Online, Offline }
+
 data class UiState(
     val phase: Phase = Phase.Loading,
     val settings: AppSettings = AppSettings(),
@@ -59,7 +79,8 @@ data class UiState(
     val loadingOlder: Boolean = false,
     val running: Boolean = false,
     val runningIds: Set<String> = emptySet(),
-    val connected: Boolean = false,
+    val streamStatus: StreamStatus = StreamStatus.Connecting,
+    val healthOk: Boolean = true,
     val busy: Boolean = false,
     val banner: String? = null,
     val loginError: String? = null,
@@ -81,6 +102,8 @@ data class UiState(
     val draftKey: String = "",
     val drafts: Set<String> = emptySet(),
     val attachments: List<UserFile> = emptyList(),
+    val preferredModel: ModelRef? = null,
+    val preferredAgent: String? = null,
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -99,7 +122,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var currentServer: ServerAddress? = null
     private var refreshJob: Job? = null
     private var draftJob: Job? = null
+    private var healthJob: Job? = null
+    private var watchJob: Job? = null
     private var pendingSession: String? = null
+    private var firstStreamOpen = true
+    private var firstPrompt: Pair<String, String>? = null
+    private var messagesToken = 0
+    private val runningEventsAt = mutableMapOf<String, Long>()
+    private val retryAttempts = mutableMapOf<String, Int>()
+    private val retryJobs = mutableMapOf<String, Job>()
 
     init {
         viewModelScope.launch {
@@ -126,12 +157,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(phase = Phase.Login) }
                 return@launch
             }
-            val ok = runCatching { api.health() }.getOrElse { false }
-            if (!ok) {
+            val online = try {
+                api.health()
+                true
+            } catch (error: UnauthorizedException) {
                 _state.update { it.copy(phase = Phase.Login, loginError = "сессия истекла, войдите снова") }
                 return@launch
+            } catch (_: Exception) {
+                false
             }
-            enterApp()
+            enterApp(initialHealthOk = online)
         }
     }
 
@@ -225,8 +260,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
-        streamJob?.cancel()
-        streamJob = null
+        stopLoops()
         viewModelScope.launch {
             runCatching { api.logout() }
             secureStore.cookies.clear()
@@ -235,14 +269,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun enterApp() {
-        _state.update { it.copy(phase = Phase.Ready, busy = false, loginError = null) }
-        startStream()
-        viewModelScope.launch {
-            runCatching { api.uiState() }.onSuccess { ui ->
-                _state.update { it.copy(hidden = ui.hidden.toSet(), status = ui.status) }
-            }
+    private fun stopLoops() {
+        streamJob?.cancel()
+        streamJob = null
+        healthJob?.cancel()
+        healthJob = null
+        watchJob?.cancel()
+        watchJob = null
+        retryJobs.values.forEach { it.cancel() }
+        retryJobs.clear()
+        retryAttempts.clear()
+        firstStreamOpen = true
+        firstPrompt = null
+    }
+
+    private suspend fun enterApp(initialHealthOk: Boolean = true) {
+        _state.update {
+            it.copy(
+                phase = Phase.Ready,
+                busy = false,
+                loginError = null,
+                healthOk = initialHealthOk,
+                streamStatus = StreamStatus.Connecting,
+            )
         }
+        firstStreamOpen = true
+        startStream()
+        startHealthMonitor()
+        startWatch()
+        viewModelScope.launch { loadUiState() }
         refreshSessions()
         val pending = pendingSession
         if (pending != null) {
@@ -258,6 +313,95 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun loadUiState() {
+        val ui = runCatching { api.uiState() }.getOrNull() ?: return
+        _state.update {
+            it.copy(
+                hidden = ui.hidden.toSet(),
+                status = ui.status,
+                preferredModel = ui.model ?: it.preferredModel,
+                preferredAgent = ui.agent ?: it.preferredAgent,
+            )
+        }
+    }
+
+    private fun startHealthMonitor() {
+        healthJob?.cancel()
+        healthJob = viewModelScope.launch {
+            var failures = 0
+            while (isActive && _state.value.phase == Phase.Ready) {
+                val ok = try {
+                    api.health()
+                    true
+                } catch (_: UnauthorizedException) {
+                    sessionExpired()
+                    return@launch
+                } catch (_: Exception) {
+                    false
+                }
+                failures = if (ok) 0 else failures + 1
+                if (ok || failures >= 2) {
+                    val was = _state.value.healthOk
+                    _state.update { it.copy(healthOk = ok) }
+                    if (ok && !was) catchUp()
+                }
+                delay(20_000)
+            }
+        }
+    }
+
+    private fun startWatch() {
+        watchJob?.cancel()
+        watchJob = viewModelScope.launch {
+            while (isActive && _state.value.phase == Phase.Ready) {
+                delay(5_000)
+                val current = _state.value
+                val selected = current.selected?.id
+                val ids = (current.runningIds + current.waitingIds).filter { it != selected }
+                if (ids.isEmpty()) continue
+                val waiting = coroutineScope {
+                    ids.map { id ->
+                        async {
+                            id to runCatching {
+                                api.permissions(id).isNotEmpty() || api.forms(id).isNotEmpty()
+                            }.getOrNull()
+                        }
+                    }.awaitAll()
+                }
+                _state.update { state ->
+                    var next = state.waitingIds
+                    for ((id, value) in waiting) {
+                        if (value == null) continue
+                        next = if (value) next + id else next - id
+                    }
+                    if (next == state.waitingIds) state else state.copy(waitingIds = next)
+                }
+            }
+        }
+    }
+
+    private fun catchUp() {
+        _state.update { it.copy(banner = null) }
+        refreshSessions()
+        val id = _state.value.selected?.id ?: return
+        viewModelScope.launch {
+            reloadMessages(id)
+            loadPermissionsAndForms(id)
+        }
+    }
+
+    fun retryConnection() {
+        _state.update { it.copy(healthOk = true) }
+        viewModelScope.launch {
+            val ok = runCatching { api.health() }.getOrElse { error ->
+                if (error is UnauthorizedException) sessionExpired()
+                false
+            }
+            _state.update { it.copy(healthOk = ok) }
+            if (ok) catchUp()
+        }
+    }
+
     fun startStream() {
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
@@ -268,33 +412,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun onEvent(event: StreamEvent) {
-        if (event.type == EventStream.CLOSED) {
-            _state.update { it.copy(connected = false) }
-            return
-        }
-        if (event.type == EventStream.OPEN) {
-            _state.update { it.copy(connected = true) }
-            val selected = _state.value.selected?.id
-            if (selected != null) {
-                viewModelScope.launch { reloadMessages(selected) }
+        when (event.type) {
+            EventStream.CONNECTING -> {
+                _state.update { it.copy(streamStatus = StreamStatus.Connecting) }
+                return
             }
-            return
-        }
-        if (event.type == EventStream.UNAUTHORIZED) {
-            streamJob?.cancel()
-            streamJob = null
-            _state.update {
-                it.copy(
-                    phase = Phase.Login,
-                    loginError = "сессия истекла, войдите снова",
-                    connected = false,
-                )
+            EventStream.CLOSED -> {
+                _state.update { it.copy(streamStatus = StreamStatus.Offline) }
+                return
             }
-            return
+            EventStream.OPEN -> {
+                _state.update { it.copy(streamStatus = StreamStatus.Online) }
+                if (firstStreamOpen) {
+                    firstStreamOpen = false
+                    return
+                }
+                catchUp()
+                return
+            }
+            EventStream.UNAUTHORIZED -> {
+                sessionExpired()
+                return
+            }
         }
         val sessionID = StreamReducer.sessionID(event)
         if (sessionID.isBlank()) {
-            if (event.type == "server.connected") _state.update { it.copy(connected = true) }
+            if (event.type == "server.connected") {
+                _state.update { it.copy(streamStatus = StreamStatus.Online) }
+            }
             return
         }
         if (event.type.startsWith("permission.") || event.type.startsWith("form.")) {
@@ -314,6 +459,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+        if (event.type == "session.execution.started") {
+            runningEventsAt[sessionID] = System.currentTimeMillis()
+            clearRetry(sessionID)
+        }
+        if (event.type == "session.execution.succeeded") clearRetry(sessionID)
+        if (event.type == "session.execution.interrupted") clearRetry(sessionID)
+        if (event.type in TERMINAL) runningEventsAt[sessionID] = System.currentTimeMillis()
+        if (event.type == "session.execution.failed" && scheduleRetry(sessionID, event)) return
         when (event.type) {
             "session.execution.started" -> {
                 notifiedWaiting.remove(sessionID)
@@ -338,6 +491,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 scheduleSessionsRefresh()
+            }
+            "session.usage.updated" -> {
+                val usage = usageOf(event)
+                _state.update { current ->
+                    val session = current.selected
+                    current.copy(
+                        selected = if (session?.id == sessionID) {
+                            session.copy(
+                                cost = usage.first ?: session.cost,
+                                tokens = usage.second ?: session.tokens,
+                            )
+                        } else {
+                            session
+                        },
+                        sessions = current.sessions.map { item ->
+                            if (item.id != sessionID) item
+                            else item.copy(
+                                cost = usage.first ?: item.cost,
+                                tokens = usage.second ?: item.tokens,
+                            )
+                        },
+                    )
+                }
             }
             "session.idle",
             "session.execution.succeeded",
@@ -396,11 +572,79 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
-        if (event.type == "session.created" || event.type == "session.deleted" ||
-            event.type == "session.renamed" || event.type == "session.moved"
-        ) {
-            scheduleSessionsRefresh()
+        if (event.type in STRUCTURAL) scheduleSessionsRefresh()
+    }
+
+    private fun scheduleRetry(sessionID: String, event: StreamEvent): Boolean {
+        val assistantID = (event.data as? JsonObject)
+            ?.get("assistantMessageID")
+            ?.let { (it as? JsonPrimitive)?.contentOrNull }
+        val attempt = (retryAttempts[sessionID] ?: 0) + 1
+        val known = if (sessionID == _state.value.selected?.id) _state.value.messages else emptyList()
+        val plan = retryPlan(known, errorOf(event.data), attempt, assistantID) ?: run {
+            clearRetry(sessionID)
+            return false
         }
+        _state.update {
+            it.copy(
+                runningIds = it.runningIds - sessionID,
+                status = it.status - sessionID,
+                compacting = it.compacting && sessionID != it.selected?.id,
+            )
+        }
+        runRetry(sessionID, plan, attempt)
+        scheduleSessionsRefresh()
+        return true
+    }
+
+    private fun runRetry(sessionID: String, plan: RetryPlan, attempt: Int) {
+        if (attempt > MAX_RETRY_ATTEMPTS) {
+            clearRetry(sessionID)
+            _state.update {
+                it.copy(
+                    runningIds = it.runningIds - sessionID,
+                    status = it.status + (sessionID to "failed"),
+                    banner = "Сервер всё ещё перегружен после $MAX_RETRY_ATTEMPTS попыток",
+                )
+            }
+            scheduleSessionsRefresh()
+            return
+        }
+        val wait = retryDelay(attempt, plan.retryAfterMs)
+        retryAttempts[sessionID] = attempt
+        _state.update {
+            it.copy(banner = "Сервер перегружен — повтор через ${(wait + 999) / 1000} с…")
+        }
+        retryJobs[sessionID]?.cancel()
+        retryJobs[sessionID] = viewModelScope.launch {
+            delay(wait)
+            retryJobs.remove(sessionID)
+            try {
+                api.prompt(sessionID, plan.text, plan.files, null, plan.messageID)
+                retryAttempts.remove(sessionID)
+                _state.update { it.copy(banner = null) }
+            } catch (error: Exception) {
+                if (error is UnauthorizedException) {
+                    sessionExpired()
+                    return@launch
+                }
+                runRetry(sessionID, plan, attempt + 1)
+            }
+        }
+    }
+
+    private fun clearRetry(sessionID: String) {
+        retryJobs.remove(sessionID)?.cancel()
+        retryAttempts.remove(sessionID)
+    }
+
+    private fun usageOf(event: StreamEvent): Pair<Double?, Tokens?> {
+        val data = event.data as? JsonObject ?: return null to null
+        val cost = (data["cost"] as? JsonPrimitive)?.doubleOrNull
+        val tokens = data["tokens"]?.let {
+            runCatching { json.decodeFromJsonElement(Tokens.serializer(), it) }.getOrNull()
+        }
+        return cost to tokens
     }
 
     private fun scheduleSessionsRefresh() {
@@ -413,6 +657,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshSessions(search: String = _state.value.search) {
         viewModelScope.launch {
+            val requestedAt = System.currentTimeMillis()
             _state.update { it.copy(search = search, searching = search.isNotBlank()) }
             runCatching { api.sessions(search.ifBlank { null }) }
                 .onSuccess { sessions ->
@@ -424,14 +669,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             sessions = sessions,
                             selected = selected,
                             searching = false,
-                            runningIds = sessions
-                                .filter { session ->
-                                    val busy = session.time.busy
-                                    val idle = session.time.idle
-                                    busy != null && (idle == null || busy > idle)
-                                }
-                                .map { session -> session.id }
-                                .toSet() + current.runningIds.filter { id -> sessions.none { it.id == id } },
+                            runningIds = mergeRunning(
+                                current.runningIds,
+                                sessions,
+                                runningEventsAt,
+                                requestedAt,
+                            ),
                         )
                     }
                 }
@@ -439,12 +682,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     if (error is UnauthorizedException) {
                         sessionExpired()
                     } else {
-                        _state.update { it.copy(searching = false, banner = error.message) }
+                        _state.update {
+                            it.copy(
+                                searching = false,
+                                banner = if (it.healthOk) error.message else it.banner,
+                            )
+                        }
                     }
                 }
-            runCatching { api.uiState() }.onSuccess { ui ->
-                _state.update { it.copy(hidden = ui.hidden.toSet(), status = ui.status) }
-            }
+            loadUiState()
         }
     }
 
@@ -469,7 +715,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             switchDraft(id)
-            settingsStore.update { it.copy(lastSession = id) }
+            val directory = session.location.directory.ifBlank { _state.value.settings.lastDirectory }
+            settingsStore.update { it.copy(lastSession = id, lastDirectory = directory) }
+            _state.update { it.copy(settings = it.settings.copy(lastSession = id, lastDirectory = directory)) }
             reloadMessages(id)
             loadPermissionsAndForms(id)
             launch { runCatching { api.children(id) }.onSuccess { children -> _state.update { it.copy(children = children) } } }
@@ -479,11 +727,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun reloadMessages(id: String) {
-        runCatching { api.messages(id, limit = 80) }
+        val token = ++messagesToken
+        val before = _state.value.messages.associateBy { it.id }
+        runCatching { api.messages(id, limit = TAIL_LIMIT) }
             .onSuccess { page ->
+                if (token != messagesToken || _state.value.selected?.id != id) return@onSuccess
                 _state.update {
                     it.copy(
-                        messages = page.data,
+                        messages = MessageMerge.snapshot(page.data, it.messages, before),
                         previous = page.previous,
                         running = it.runningIds.contains(id),
                         loadingMessages = false,
@@ -491,9 +742,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             .onFailure { error ->
+                if (token != messagesToken) return@onFailure
                 _state.update { it.copy(loadingMessages = false) }
                 if (error is UnauthorizedException) sessionExpired()
-                else _state.update { it.copy(banner = error.message) }
+                else if (_state.value.healthOk) _state.update { it.copy(banner = error.message) }
             }
     }
 
@@ -503,18 +755,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.loadingOlder) return
         viewModelScope.launch {
             _state.update { it.copy(loadingOlder = true) }
-            runCatching { api.messages(selected.id, before = before, limit = 80) }
+            runCatching { api.messages(selected.id, before = before, limit = TAIL_LIMIT) }
                 .onSuccess { page ->
-                    _state.update {
-                        it.copy(
-                            messages = page.data + it.messages,
-                            previous = page.previous,
-                            loadingOlder = false,
-                        )
+                    if (_state.value.selected?.id != selected.id) {
+                        _state.update { it.copy(loadingOlder = false) }
+                        return@onSuccess
+                    }
+                    _state.update { current ->
+                        val next = MessageMerge.prepend(current.messages, page.data)
+                        val cursor = if (
+                            page.data.isEmpty() ||
+                            next.size == current.messages.size ||
+                            page.previous == before
+                        ) {
+                            null
+                        } else {
+                            page.previous
+                        }
+                        current.copy(messages = next, previous = cursor, loadingOlder = false)
                     }
                 }
                 .onFailure { error ->
-                    _state.update { it.copy(loadingOlder = false, banner = error.message) }
+                    _state.update { it.copy(loadingOlder = false) }
+                    if (error !is UnauthorizedException) _state.update { it.copy(banner = error.message) }
+                    else sessionExpired()
                 }
         }
     }
@@ -534,6 +798,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val sentKey = _state.value.draftKey
             _state.update { it.copy(busy = true, banner = null) }
             var localID: String? = null
+            var created = false
+            var activeSession: String? = null
             try {
                 var session = _state.value.selected
                 if (session == null) {
@@ -543,7 +809,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         onResult(false)
                         return@launch
                     }
-                    session = api.createSession(directory)
+                    session = api.createSession(
+                        directory,
+                        agent = _state.value.preferredAgent,
+                        model = _state.value.preferredModel,
+                    )
+                    created = true
                     _state.update {
                         it.copy(
                             selected = session,
@@ -552,6 +823,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     settingsStore.update { it.copy(lastSession = session.id) }
                 }
+                activeSession = session.id
                 localID = "local-${System.currentTimeMillis()}"
                 val optimistic = Message(
                     id = localID!!,
@@ -568,7 +840,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         runningIds = it.runningIds + session.id,
                     )
                 }
+                runningEventsAt[session.id] = System.currentTimeMillis()
                 val admitted = api.prompt(session.id, body, attachments, delivery)
+                if (created) firstPrompt = session.id to body
                 if (!admitted.isNullOrBlank()) {
                     _state.update { current ->
                         current.copy(messages = current.messages.map { if (it.id == localID) it.copy(id = admitted) else it })
@@ -598,10 +872,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 if (error is UnauthorizedException) {
                     sessionExpired()
                 } else {
+                    val sid = activeSession
                     _state.update { current ->
                         current.copy(
                             busy = false,
                             running = false,
+                            runningIds = if (sid == null) current.runningIds else current.runningIds - sid,
                             messages = if (failed == null) current.messages else current.messages.filterNot { it.id == failed },
                             banner = error.message,
                         )
@@ -615,54 +891,86 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun stop() {
         val id = _state.value.selected?.id ?: return
         viewModelScope.launch {
+            var interrupted = false
             runCatching { api.interrupt(id) }
+                .onSuccess { interrupted = true }
                 .onFailure { error -> _state.update { current -> current.copy(banner = error.message) } }
+            clearRetry(id)
             _state.update { it.copy(running = false, runningIds = it.runningIds - id) }
+            val first = firstPrompt
+            if (!interrupted || first == null || first.first != id) return@launch
+            firstPrompt = null
+            val answered = _state.value.messages.any { it.type == "assistant" }
+            val mine = _state.value.messages.count { it.type == "user" }
+            if (answered || mine > 1) return@launch
+            runCatching { api.deleteSession(id) }
+            val directory = _state.value.settings.lastDirectory
+            val key = "new:$directory"
+            draftJob?.cancel()
+            draftStore.set(key, first.second)
+            draftStore.setFiles(key, emptyList())
+            runCatching { api.setDraft(key, first.second) }
+            settingsStore.update { it.copy(lastSession = "") }
+            _state.update {
+                it.copy(
+                    selected = null,
+                    messages = emptyList(),
+                    previous = null,
+                    permissions = emptyList(),
+                    forms = emptyList(),
+                    children = emptyList(),
+                    compacting = false,
+                    loadingMessages = false,
+                    runningIds = it.runningIds - id,
+                    waitingIds = it.waitingIds - id,
+                    status = it.status - id,
+                    sessions = it.sessions.filterNot { session -> session.id == id },
+                )
+            }
+            switchDraft(key)
         }
     }
 
     fun startNewSession(directory: String) {
         viewModelScope.launch {
-            _state.update { it.copy(busy = true) }
-            runCatching { api.createSession(directory) }
-                .onSuccess { session ->
-                    val newKey = "new:$directory"
-                    val stored = draftStore.get(newKey).text
-                    val moved = if (_state.value.draftKey == newKey && _state.value.draft.isNotBlank()) _state.value.draft else stored
-                    val movedFiles = if (_state.value.draftKey == newKey) _state.value.attachments else draftStore.getFiles(newKey)
-                    draftJob?.cancel()
-                    draftStore.set(session.id, moved)
-                    draftStore.setFiles(session.id, movedFiles)
-                    draftStore.set(newKey, "")
-                    draftStore.setFiles(newKey, emptyList())
-                    settingsStore.update { it.copy(lastDirectory = directory, lastSession = session.id) }
-                    _state.update {
-                        it.copy(
-                            selected = session,
-                            messages = emptyList(),
-                            previous = null,
-                            busy = false,
-                            children = emptyList(),
-                            draftKey = session.id,
-                            draft = moved,
-                            attachments = movedFiles,
-                            sessions = listOf(session) + it.sessions.filter { existing -> existing.id != session.id },
-                        )
-                    }
-                    if (moved.isNotBlank()) runCatching { api.setDraft(session.id, moved) }
-                    loadPermissionsAndForms(session.id)
-                }
-                .onFailure { error ->
-                    _state.update { it.copy(busy = false, banner = error.message) }
-                }
+            settingsStore.update { it.copy(lastDirectory = directory, lastSession = "") }
+            _state.update {
+                it.copy(
+                    settings = it.settings.copy(lastDirectory = directory),
+                    selected = null,
+                    messages = emptyList(),
+                    previous = null,
+                    running = false,
+                    children = emptyList(),
+                    permissions = emptyList(),
+                    forms = emptyList(),
+                    compacting = false,
+                    loadingMessages = false,
+                    busy = false,
+                )
+            }
+            switchDraft("new:$directory")
         }
     }
 
     fun setDirectory(directory: String) {
         viewModelScope.launch {
-            settingsStore.update { it.copy(lastDirectory = directory) }
-            _state.update { it.copy(settings = it.settings.copy(lastDirectory = directory)) }
-            if (_state.value.selected == null) switchDraft("new:$directory")
+            settingsStore.update { it.copy(lastDirectory = directory, lastSession = "") }
+            _state.update {
+                it.copy(
+                    settings = it.settings.copy(lastDirectory = directory),
+                    selected = null,
+                    messages = emptyList(),
+                    previous = null,
+                    running = false,
+                    children = emptyList(),
+                    permissions = emptyList(),
+                    forms = emptyList(),
+                    compacting = false,
+                    loadingMessages = false,
+                )
+            }
+            switchDraft("new:$directory")
         }
     }
 
@@ -906,8 +1214,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun switchModel(model: ModelRef) {
-        val session = _state.value.selected ?: return
+        _state.update { it.copy(preferredModel = model) }
         viewModelScope.launch {
+            runCatching { api.setPreferredModel(model) }
+            val session = _state.value.selected ?: return@launch
             runCatching { api.switchModel(session.id, model) }
                 .onSuccess {
                     _state.update { current ->
@@ -922,8 +1232,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun switchAgent(agent: String) {
-        val session = _state.value.selected ?: return
+        _state.update { it.copy(preferredAgent = agent) }
         viewModelScope.launch {
+            runCatching { api.setPreferredAgent(agent) }
+            val session = _state.value.selected ?: return@launch
             runCatching { api.switchAgent(session.id, agent) }
                 .onSuccess {
                     _state.update { current ->
@@ -999,6 +1311,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return model.build()
     }
 
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true; explicitNulls = false }
+
+    private companion object {
+        const val TAIL_LIMIT = 50
+        val TERMINAL = setOf(
+            "session.idle",
+            "session.execution.succeeded",
+            "session.execution.failed",
+            "session.execution.interrupted",
+        )
+        val STRUCTURAL = setOf(
+            "session.created",
+            "session.renamed",
+            "session.deleted",
+            "session.archived",
+            "session.unarchived",
+            "session.moved",
+            "session.forked",
+            "session.metadata.updated",
+            "session.model.selected",
+            "session.agent.selected",
+        )
+    }
+
     private fun sessionTitle(id: String): String =
         (_state.value.sessions.firstOrNull { it.id == id } ?: _state.value.children.firstOrNull { it.id == id })
             ?.title?.takeIf { it.isNotBlank() } ?: "Чат"
@@ -1018,10 +1354,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "heif", "svg")
 
     private fun sessionExpired() {
-        streamJob?.cancel()
-        streamJob = null
+        stopLoops()
         _state.update {
-            it.copy(phase = Phase.Login, loginError = "сессия истекла, войдите снова", connected = false)
+            it.copy(
+                phase = Phase.Login,
+                loginError = "сессия истекла, войдите снова",
+                streamStatus = StreamStatus.Offline,
+                healthOk = false,
+            )
         }
     }
 }

@@ -1,27 +1,35 @@
 package space.bongdo.nit.data
 
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.sse.EventSource
 import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
+import kotlin.math.min
+import kotlin.math.roundToLong
+import kotlin.random.Random
 
 object EventStream {
     const val UNAUTHORIZED = "nit.unauthorized"
+    const val CONNECTING = "nit.connecting"
     const val OPEN = "nit.open"
     const val CLOSED = "nit.closed"
+
+    fun retryDelay(attempt: Int, random: Double = Random.nextDouble()): Long {
+        val base = 500L shl min(attempt, 4)
+        return (base * (0.7 + random * 0.6)).roundToLong().coerceIn(100L, 8_000L)
+    }
 
     fun open(client: OkHttpClient, url: String): Flow<StreamEvent> = channelFlow {
         var attempt = 0
         val json = Json { ignoreUnknownKeys = true; isLenient = true }
         while (true) {
+            trySend(StreamEvent(type = CONNECTING))
             val closed = CompletableDeferred<Unit>()
             var source: EventSource? = null
             val listener = object : EventSourceListener() {
@@ -62,8 +70,8 @@ object EventStream {
             } finally {
                 source.cancel()
             }
+            delay(retryDelay(attempt))
             attempt += 1
-            delay(minOf(30_000L, 1_000L shl minOf(attempt, 5)))
         }
     }
 }

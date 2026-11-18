@@ -81,6 +81,17 @@ class NitApiTest {
 
 class EventStreamTest {
     @Test
+    fun retryDelayJittersAroundTheBaseAndStaysBounded() {
+        assertEquals(350L, space.bongdo.nit.data.EventStream.retryDelay(0, 0.0))
+        assertEquals(1_300L, space.bongdo.nit.data.EventStream.retryDelay(1, 1.0))
+        assertEquals(8_000L, space.bongdo.nit.data.EventStream.retryDelay(10, 1.0))
+        for (attempt in 0..10) {
+            val delay = space.bongdo.nit.data.EventStream.retryDelay(attempt, 0.5)
+            assertTrue(delay in 100L..8_000L)
+        }
+    }
+
+    @Test
     fun readsSseEventAndSessionID() = kotlinx.coroutines.runBlocking {
         val server = MockWebServer()
         server.enqueue(

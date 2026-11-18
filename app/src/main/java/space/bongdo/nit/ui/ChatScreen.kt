@@ -102,6 +102,17 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
     var stick by remember { mutableStateOf(true) }
 
+    fun newChat() {
+        val directory = state.settings.lastDirectory
+        if (directory.isNotBlank()) {
+            viewModel.startNewSession(directory)
+        } else {
+            pickerCreates = true
+            pickerOpen = true
+            viewModel.loadProjects()
+        }
+    }
+
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val displayVersion = display.lastOrNull()?.content?.sumOf { it.text.length } ?: 0
     LaunchedEffect(display.size, displayVersion, state.running, state.compacting) {
@@ -299,9 +310,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 onCommand = { command ->
                     when (command) {
                         "new" -> {
-                            pickerCreates = true
-                            pickerOpen = true
-                            viewModel.loadProjects()
+                            newChat()
                         }
                         "dir" -> {
                             pickerCreates = false
@@ -340,17 +349,20 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 cost = state.selected?.cost ?: 0.0,
                 context = contextPercent(state).takeIf { it > 0 }?.let { "ctx $it%" } ?: "",
                 contextProgress = contextPercent(state) / 100f,
-                connected = state.connected,
+                connected = state.healthOk && state.streamStatus == StreamStatus.Online,
+                connecting = state.streamStatus == StreamStatus.Connecting,
                 parent = state.selected?.parentID != null,
                 onParent = viewModel::backToParent,
                 onNew = {
-                    pickerCreates = true
-                    pickerOpen = true
-                    viewModel.loadProjects()
+                    newChat()
                 },
                 onSwipeDown = { topMenuOpen = true },
             )
-            state.banner?.let { Banner(it, viewModel::dismissBanner) }
+            if (!state.healthOk) {
+                Banner("Нет связи с сервером. Повторяем…", viewModel::retryConnection, action = "повторить")
+            } else {
+                state.banner?.let { Banner(it, viewModel::dismissBanner) }
+            }
         }
     }
 
@@ -368,9 +380,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 topMenuOpen = false
                 when (action) {
                     "new" -> {
-                        pickerCreates = true
-                        pickerOpen = true
-                        viewModel.loadProjects()
+                        newChat()
                     }
                     "dir" -> {
                         pickerCreates = false
@@ -406,9 +416,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             onSearch = viewModel::refreshSessions,
             onNew = {
                 sessionsOpen = false
-                pickerCreates = true
-                pickerOpen = true
-                viewModel.loadProjects()
+                newChat()
             },
         )
     }
@@ -459,6 +467,7 @@ private fun ChatTopBar(
     context: String,
     contextProgress: Float,
     connected: Boolean,
+    connecting: Boolean,
     onNew: () -> Unit,
     parent: Boolean,
     onParent: () -> Unit,
@@ -554,7 +563,13 @@ private fun ChatTopBar(
                 .padding(end = 2.dp)
                 .size(7.dp)
                 .clip(CircleShape)
-                .background(if (connected) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.outline),
+                .background(
+                    when {
+                        connecting -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.35f)
+                        connected -> MaterialTheme.colorScheme.tertiary
+                        else -> MaterialTheme.colorScheme.error
+                    },
+                ),
         )
         IconButton(onClick = onNew) {
             Icon(Icons.Outlined.Add, contentDescription = "новый чат", tint = MaterialTheme.colorScheme.onSurfaceVariant)

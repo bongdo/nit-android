@@ -44,9 +44,7 @@ class NitApi(
         .writeTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    private val streamClient = client.newBuilder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .build()
+    private val streamClient = client
 
     fun useServer(address: ServerAddress) {
         server = address
@@ -149,30 +147,48 @@ class NitApi(
             json.decodeFromString<MessagesPage>(response.body?.string().orEmpty())
         }
 
-    suspend fun createSession(directory: String, title: String? = null): Session =
-        withContext(Dispatchers.IO) {
-            val body = buildJsonObject {
-                put("directory", directory)
-                if (!title.isNullOrBlank()) put("title", title)
-            }
-            val response = call(
-                Request.Builder()
-                    .url(api("/api/sessions"))
-                    .post(body.toString().toRequestBody(JSON))
-                    .build(),
-            )
-            json.decodeFromString<SessionEnvelope>(response.body?.string().orEmpty()).data
+    suspend fun createSession(
+        directory: String,
+        title: String? = null,
+        agent: String? = null,
+        model: ModelRef? = null,
+    ): Session = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("directory", directory)
+            if (!title.isNullOrBlank()) put("title", title)
+            if (!agent.isNullOrBlank()) put("agent", agent)
+            if (model != null) put("model", json.encodeToJsonElement(model))
         }
+        val response = call(
+            Request.Builder()
+                .url(api("/api/sessions"))
+                .post(body.toString().toRequestBody(JSON))
+                .build(),
+        )
+        json.decodeFromString<SessionEnvelope>(response.body?.string().orEmpty()).data
+    }
+
+    suspend fun deleteSession(id: String) = withContext(Dispatchers.IO) {
+        call(
+            Request.Builder()
+                .url(api("/api/sessions/$id"))
+                .delete()
+                .build(),
+        ).close()
+        Unit
+    }
 
     suspend fun prompt(
         id: String,
         text: String,
         files: List<UserFile> = emptyList(),
         delivery: String? = null,
+        messageID: String? = null,
     ): String? = withContext(Dispatchers.IO) {
         val payload = buildJsonObject {
             put("text", text)
             if (delivery == "queue" || delivery == "steer") put("delivery", delivery)
+            if (!messageID.isNullOrBlank()) put("id", messageID)
             if (files.isNotEmpty()) {
                 put(
                     "files",
@@ -345,6 +361,16 @@ class NitApi(
 
     suspend fun switchAgent(id: String, agent: String) = post(
         "/api/sessions/$id/agent",
+        buildJsonObject { put("agent", agent) },
+    )
+
+    suspend fun setPreferredModel(model: ModelRef) = post(
+        "/api/ui/model",
+        buildJsonObject { put("model", json.encodeToJsonElement(model)) },
+    )
+
+    suspend fun setPreferredAgent(agent: String) = post(
+        "/api/ui/agent",
         buildJsonObject { put("agent", agent) },
     )
 

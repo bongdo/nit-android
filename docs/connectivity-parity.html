@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nit: связь с сервером, Android vs web</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --line: rgba(127, 127, 127, 0.32);
+    --surface: rgba(127, 127, 127, 0.09);
+    --surface-2: rgba(127, 127, 127, 0.16);
+    --ok: #2f9e63;
+    --left: #c58a1b;
+    --accent: #4f8ef7;
+    --muted: rgba(127, 127, 127, 0.78);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: transparent; color: inherit; }
+  body {
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    padding: 24px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 24px; line-height: 1.25; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { font-size: 16px; margin: 30px 0 12px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+  .lead { margin: 0 0 20px; color: var(--muted); max-width: 760px; }
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 18px 0 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: var(--surface); min-width: 132px; }
+  .stat b { display: block; font-size: 24px; line-height: 1.1; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  .bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; margin: 14px 0 6px; background: var(--surface-2); }
+  .bar i { display: block; height: 100%; }
+  .bar .fixed { background: var(--ok); }
+  .bar .open { background: var(--left); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
+  .legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; background: currentColor; vertical-align: 1px; }
+  .legend .f { color: var(--ok); }
+  .legend .o { color: var(--left); }
+  .flows { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .flow { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--surface); }
+  .flow h3 { font-size: 13px; margin: 0 0 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+  .step { border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; font-size: 13px; background: transparent; }
+  .step + .arrow { text-align: center; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .step.old { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--left); }
+  .step.new { border-color: color-mix(in srgb, var(--ok) 55%, transparent); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .tag { display: inline-block; font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 5px; border: 1px solid currentColor; vertical-align: 1px; margin-left: 4px; }
+  .tag.fixed { color: var(--ok); }
+  .tag.open { color: var(--left); }
+  .tag.same { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+  td.num { width: 34px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  td.state { width: 120px; white-space: nowrap; }
+  .wrap { overflow-x: auto; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  code { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+  @media (max-width: 640px) {
+    body { padding: 16px; }
+    .split { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<h1>Связь с сервером: Android приводим к web</h1>
+<p class="lead">Один и тот же Go-прокси, но у приложения была своя жизнь: разовая проверка здоровья, тихий обрыв SSE, пустые чаты при создании, замена транскрипта вместо склейки. Ниже — карта расхождений и что уже совпадает.</p>
+
+<div class="stats">
+  <div class="stat"><b>24</b><span>расхождения закрыты</span></div>
+  <div class="stat"><b>7</b><span>остались сознательно</span></div>
+  <div class="stat"><b>3</b><span>совпадали и раньше</span></div>
+</div>
+<div class="bar"><i class="fixed" style="width:71%"></i><i class="open" style="width:20%"></i></div>
+<div class="legend"><span class="f">сделано</span><span class="o">осталось</span><span>совпадает</span></div>
+
+<h2>Четыре пути, где поведение расходилось</h2>
+<div class="flows">
+  <div class="flow">
+    <h3>Старт приложения</h3>
+    <div class="step old">health один раз → нет сети → логин</div>
+    <div class="arrow">↓ стало</div>
+    <div class="step new">cookie → приложение открывается → health каждые 20 с</div>
+    <div class="arrow">↓</div>
+    <div class="step new">2 провала → офлайн-баннер + «повторить»</div>
+  </div>
+  <div class="flow">
+    <h3>Обрыв SSE</h3>
+    <div class="step old">readTimeout = ∞ → тихо висим</div>
+    <div class="arrow">↓ стало</div>
+    <div class="step new">ping 20 с, timeout 45 с → CLOSED</div>
+    <div class="arrow">↓</div>
+    <div class="step new">пауза 0.5–8 с с джиттером → OPEN</div>
+    <div class="arrow">↓</div>
+    <div class="step new">догон: сообщения + сессии + формы</div>
+  </div>
+  <div class="flow">
+    <h3>Новый чат</h3>
+    <div class="step old">POST /sessions сразу → пустой чат в списке</div>
+    <div class="arrow">↓ стало</div>
+    <div class="step new">локальный «новый чат» → первый промпт</div>
+    <div class="arrow">↓</div>
+    <div class="step new">POST /sessions с agent и model → prompt</div>
+    <div class="arrow">↓ стоп до ответа</div>
+    <div class="step new">DELETE пустого чата → текст назад в композер</div>
+  </div>
+  <div class="flow">
+    <h3>Перезагрузка транскрипта</h3>
+    <div class="step old">ответ сервера заменяет весь список</div>
+    <div class="arrow">↓ стало</div>
+    <div class="step new">снимок + сообщения, изменённые стримом, склеиваются</div>
+    <div class="arrow">↓</div>
+    <div class="step new">старые страницы: дедуп и защита от устаревшего ответа</div>
+  </div>
+</div>
+
+<h2>Карта расхождений</h2>
+<div class="wrap">
+<table>
+  <thead><tr><th class="num">#</th><th>Область</th><th>Было в Android</th><th>Стало</th><th class="state">Статус</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td>health-цикл</td><td>один запрос при запуске</td><td>каждые 20 с, дебаунс на 2 провала</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">2</td><td>старт без сети</td><td>логин «сессия истекла»</td><td>offline-режим, логин только по 401</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">3</td><td>офлайн-баннер</td><td>не было</td><td>баннер + повтор</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">4</td><td>возврат сети</td><td>ничего</td><td>каталог, сессии, выбранный чат</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">5</td><td>холодный старт</td><td>скелетон</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">6</td><td>инстансы</td><td>один сервер</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">7</td><td>статус канала</td><td>boolean</td><td>connecting / online / offline</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">8</td><td>backoff</td><td>1–30 с без джиттера</td><td>0.5–8 с, джиттер 0.7–1.3</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">9</td><td>мёртвая связь</td><td>readTimeout = ∞</td><td>45 с при ping 20 с</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">10</td><td>догон</td><td>только сообщения</td><td>сообщения + сессии + формы + разрешения</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">13</td><td>склейка дельт</td><td>событие → кадр</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">15</td><td>новый чат</td><td>POST сразу, пустые чаты</td><td>создание на первом промпте</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">16</td><td>папка нового чата</td><td>всегда пикер</td><td>текущая папка, пикер если её нет</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">17</td><td>тело создания</td><td>только directory</td><td>directory + agent + model</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">18</td><td>предпочтения</td><td>не сохранялись</td><td>/api/ui/model и /api/ui/agent</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">19</td><td>стоп до ответа</td><td>пустой чат оставался</td><td>удаление и возврат текста</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">20</td><td>перегрузка</td><td>ошибка</td><td>повтор до 5 раз с backoff</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">21</td><td>id промпта</td><td>не передавался</td><td>тот же id при повторе</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">22</td><td>удаление чата</td><td>метода не было</td><td>DELETE /api/sessions/{id}</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">23</td><td>события списка</td><td>4 типа</td><td>10 типов</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">24</td><td>running</td><td>список перетирал SSE</td><td>метка времени у события</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">26</td><td>удалённый выбранный чат</td><td>остаётся выбранным</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">27</td><td>стоимость</td><td>не обновлялась</td><td>session.usage.updated</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">28</td><td>хвост</td><td>80 сообщений</td><td>50, как web</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">29</td><td>перезагрузка</td><td>замена списка</td><td>склейка с дельтами</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">30</td><td>старые страницы</td><td>дубли и гонки</td><td>дедуп + токен</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">31</td><td>предзагрузка</td><td>нет</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">32</td><td>tool-детали</td><td>не рендерятся</td><td>не применимо</td><td class="state"><span class="tag same">совпадает</span></td></tr>
+    <tr><td class="num">33</td><td>кэш чата</td><td>скелетон</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">34</td><td>формы после обрыва</td><td>не грузились</td><td>грузятся в догоне</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">35</td><td>фоновые формы</td><td>только событие</td><td>опрос каждые 5 с</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">36</td><td>возврат из фона</td><td>ждал тика</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">25</td><td>пагинация списка</td><td>100/страница</td><td>так же</td><td class="state"><span class="tag same">совпадает</span></td></tr>
+    <tr><td class="num">37</td><td>уведомления</td><td>локальные из SSE</td><td>платформа разная</td><td class="state"><span class="tag same">совпадает</span></td></tr>
+  </tbody>
+</table>
+</div>
+<p class="note">Полное описание и причины — <code>docs/connectivity-parity.md</code>. Проверка — <code>bin/check</code>.</p>
+</body>
+</html>

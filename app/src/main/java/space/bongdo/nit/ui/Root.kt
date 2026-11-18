@@ -118,7 +118,7 @@ fun byteLabel(bytes: Long?): String {
 }
 
 @Composable
-fun Banner(text: String, onDismiss: () -> Unit) {
+fun Banner(text: String, onDismiss: () -> Unit, action: String = "ок") {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -132,7 +132,7 @@ fun Banner(text: String, onDismiss: () -> Unit) {
             Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.width(8.dp))
             Text(
-                "ок",
+                action,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(4.dp).clickableNoRipple(onDismiss),
