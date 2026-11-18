@@ -200,7 +200,8 @@ fun SessionsContent(
             }
             Spacer(Modifier.weight(1f))
             Text(
-                "$directoryCount dirs · ${roots.size} chats",
+                "$directoryCount ${if (directoryCount == 1) "dir" else "dirs"} · " +
+                    "${roots.size} ${if (roots.size == 1) "chat" else "chats"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )

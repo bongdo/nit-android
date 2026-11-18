@@ -409,13 +409,13 @@ private fun AssistantMessage(
         ""
     }
     val stats = buildList {
-        if (message.shownSteps > 0) add("${message.shownSteps} steps")
-        if (message.shownTools > 0) add("${message.shownTools} tools")
-        if (message.shownErrors > 0) add("${message.shownErrors} errors")
+        if (message.shownSteps > 0) add(countLabel(message.shownSteps, "step", "steps"))
+        if (message.shownTools > 0) add(countLabel(message.shownTools, "tool", "tools"))
+        if (message.shownErrors > 0) add(countLabel(message.shownErrors, "error", "errors"))
         if (duration.isNotBlank()) add(duration)
     }.joinToString(" · ")
     val liveStats = buildList {
-        if (message.shownSteps > 0) add("${message.shownSteps} steps")
+        if (message.shownSteps > 0) add(countLabel(message.shownSteps, "step", "steps"))
         if (duration.isNotBlank()) add(duration)
     }.joinToString(" · ")
     val summary = when {
@@ -566,6 +566,9 @@ private fun AssistantMessage(
         }
     }
 }
+
+private fun countLabel(count: Int, one: String, many: String): String =
+    "$count ${if (count == 1) one else many}"
 
 @Composable
 private fun UserAction(
