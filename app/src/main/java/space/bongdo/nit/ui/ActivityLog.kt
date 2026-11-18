@@ -57,7 +57,7 @@ fun StepsRow(
     ) {
         Icon(
             if (expanded) Icons.Outlined.KeyboardArrowDown else Icons.Outlined.KeyboardArrowRight,
-            contentDescription = if (expanded) "свернуть шаги" else "показать шаги",
+            contentDescription = if (expanded) "Collapse steps" else "Show steps",
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(15.dp),
         )
@@ -90,7 +90,7 @@ fun StepsRow(
             Spacer(Modifier.width(5.dp))
             Icon(
                 Icons.Outlined.ErrorOutline,
-                contentDescription = "ошибки в шагах",
+                contentDescription = "errors in steps",
                 tint = MaterialTheme.colorScheme.error,
                 modifier = Modifier.size(13.dp),
             )
@@ -148,7 +148,7 @@ private fun ReasoningRow(part: Part, streaming: Boolean) {
             )
             Spacer(Modifier.width(5.dp))
             Text(
-                if (streaming) "Думает" else "Думал",
+                if (streaming) "Thinking" else "Thought",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (streaming) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -277,7 +277,7 @@ private fun ToolRow(part: Part, directory: String?) {
                 }
                 if (inputText.isBlank() && content.isEmpty() && error.isNullOrBlank()) {
                     Text(
-                        "нет деталей",
+                        "no details",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     )

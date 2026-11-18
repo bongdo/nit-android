@@ -54,7 +54,8 @@ class ApiContractTest {
                     )
                     path.endsWith("/api/sessions/ses_1") && request.method == "DELETE" ->
                         MockResponse().setResponseCode(204)
-                    path.endsWith("/api/sessions") -> json(
+                    (path.endsWith("/api/sessions") || path.contains("/api/sessions?")) &&
+                        request.method == "GET" -> json(
                         """{"data":[{"id":"ses_1","title":"T","location":{"directory":"/work"},"time":{"created":1,"updated":2}}],"cursor":{"next":null}}""",
                     )
                     path.endsWith("/api/sessions/ses_1") -> json(

@@ -19,22 +19,22 @@ class ActivityTest {
     @Test
     fun summarisesShellAndFileTools() {
         val shell = tool("bash", buildJsonObject { put("command", "  ls \n  -la ") })
-        assertEquals("Выполняет" to "ls -la", toolSummary(shell))
+        assertEquals("Running" to "ls -la", toolSummary(shell))
 
         val read = tool("read", buildJsonObject { put("filePath", "/work/src/Main.kt") })
-        assertEquals("Читает" to "src/Main.kt", toolSummary(read, "/work"))
+        assertEquals("Reading" to "src/Main.kt", toolSummary(read, "/work"))
 
         val search = tool("grep", buildJsonObject { put("pattern", "TODO"); put("path", "/work/a.kt") })
-        assertEquals("Ищет" to "TODO in a.kt", toolSummary(search, "/work"))
+        assertEquals("Searching" to "TODO in a.kt", toolSummary(search, "/work"))
     }
 
     @Test
     fun activityLineDescribesThinkingAndTools() {
         val reasoning = Part(type = "reasoning", text = "\n  checking the diff  \nmore")
-        assertEquals("Думает · checking the diff", activityLine(reasoning))
+        assertEquals("Thinking · checking the diff", activityLine(reasoning))
 
         val shell = tool("bash", buildJsonObject { put("command", "make") })
-        assertEquals("Выполняет make", activityLine(shell))
+        assertEquals("Running make", activityLine(shell))
     }
 
     @Test

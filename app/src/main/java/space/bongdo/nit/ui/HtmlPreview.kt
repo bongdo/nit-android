@@ -29,7 +29,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun HtmlPreviewDialog(html: String, title: String = "HTML-превью", onClose: () -> Unit) {
+fun HtmlPreviewDialog(html: String, title: String = "HTML preview", onClose: () -> Unit) {
     Dialog(
         onDismissRequest = onClose,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
@@ -48,7 +48,7 @@ fun HtmlPreviewDialog(html: String, title: String = "HTML-превью", onClose
                         modifier = Modifier.weight(1f).padding(start = 8.dp),
                     )
                     IconButton(onClick = onClose) {
-                        Icon(Icons.Outlined.Close, contentDescription = "закрыть")
+                        Icon(Icons.Outlined.Close, contentDescription = "Close")
                     }
                 }
                 HtmlView(html, Modifier.weight(1f).fillMaxWidth())

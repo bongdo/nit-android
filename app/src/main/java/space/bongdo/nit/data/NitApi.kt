@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -61,7 +62,7 @@ class NitApi(
     fun eventsUrl(): String = api("/api/events")
 
     suspend fun login(user: String, password: String, code: String): Unit = withContext(Dispatchers.IO) {
-        val address = server ?: throw ApiException("сервер не настроен")
+        val address = server ?: throw ApiException("Server is not configured")
         val body = FormBody.Builder()
             .add("name", user)
             .add("next", address.basePath.ifEmpty { "" } + "/")
@@ -83,12 +84,12 @@ class NitApi(
             when {
                 response.code == 303 || response.code == 302 || response.code == 307 ->
                     if (!jar.hasSession(address.origin.toHttpUrl())) {
-                        throw ApiException("сервер не выдал сессию", response.code)
+                        throw ApiException("The server did not issue a session", response.code)
                     }
-                response.code == 401 -> throw ApiException("неверное имя, код или пароль", 401)
-                response.code == 429 -> throw ApiException("слишком много попыток, подождите", 429)
-                response.isSuccessful -> throw ApiException("сервер не принял вход", response.code)
-                else -> throw ApiException("вход не удался (${response.code})", response.code)
+                response.code == 401 -> throw ApiException("Wrong name, code, or password", 401)
+                response.code == 429 -> throw ApiException("Too many attempts, wait a bit", 429)
+                response.isSuccessful -> throw ApiException("The server rejected the sign-in", response.code)
+                else -> throw ApiException("Sign-in failed (${response.code})", response.code)
             }
         }
     }
@@ -115,6 +116,7 @@ class NitApi(
         var cursor: String? = null
         for (page in 0 until 100) {
             val url = httpUrl("/api/sessions").newBuilder().apply {
+                if (search.isNullOrBlank()) addQueryParameter("children", "true")
                 if (!search.isNullOrBlank()) addQueryParameter("search", search)
                 if (cursor != null) addQueryParameter("cursor", cursor)
             }.build()
@@ -369,6 +371,14 @@ class NitApi(
         buildJsonObject { put("status", status) },
     )
 
+    suspend fun setHidden(ids: List<String>, hidden: Boolean) = post(
+        "/api/ui/hidden",
+        buildJsonObject {
+            put("ids", buildJsonArray { ids.forEach { add(JsonPrimitive(it)) } })
+            put("hidden", hidden)
+        },
+    )
+
     suspend fun switchModel(id: String, model: ModelRef) = post(
         "/api/sessions/$id/model",
         buildJsonObject { put("model", json.encodeToJsonElement(model)) },
@@ -433,7 +443,7 @@ class NitApi(
         return runCatching {
             val body = json.decodeFromString<ApiErrorBody>(text)
             body.error ?: body.message
-        }.getOrNull()?.takeIf { it.isNotBlank() } ?: "ошибка ${response.code}"
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: "Error ${response.code}"
     }
 
     private inline fun <reified T> parseDataList(body: String): List<T> {
@@ -445,7 +455,7 @@ class NitApi(
     private inline fun <reified T> parseListOrData(body: String): List<T> = parseDataList(body)
 
     private fun httpUrl(path: String): HttpUrl {
-        val address = server ?: throw ApiException("сервер не настроен")
+        val address = server ?: throw ApiException("Server is not configured")
         return (address.apiRoot + path).toHttpUrl()
     }
 

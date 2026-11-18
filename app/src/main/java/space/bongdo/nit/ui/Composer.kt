@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -32,7 +33,6 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -79,7 +79,6 @@ fun ComposerBody(
             keyboard?.show()
         }
     }
-    var delivery by rememberSaveable(running) { mutableStateOf("steer") }
     var commandDismissed by rememberSaveable { mutableStateOf(false) }
     val photo = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
@@ -100,33 +99,7 @@ fun ComposerBody(
     }
     val paletteOpen = matches.isNotEmpty() && !commandDismissed
 
-    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp)) {
-        if (running) {
-            Row(
-                Modifier.padding(start = 4.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                listOf("steer" to "В текущий ход", "queue" to "В очередь").forEach { (id, label) ->
-                    val active = delivery == id
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(7.dp))
-                            .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
-                            .clickableNoRipple { delivery = id }
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                    )
-                }
-                Text(
-                    "агент сейчас работает",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                )
-            }
-        }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp)) {
         AnimatedVisibility(
             visible = paletteOpen,
             enter = fadeIn() + expandVertically(),
@@ -174,7 +147,7 @@ fun ComposerBody(
                         }
                         Spacer(Modifier.width(5.dp))
                         Text(
-                            item.name ?: "файл",
+                            item.name ?: "file",
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -182,7 +155,7 @@ fun ComposerBody(
                         )
                         Icon(
                             Icons.Outlined.Close,
-                            contentDescription = "убрать",
+                            contentDescription = "Remove",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .padding(horizontal = 4.dp)
@@ -193,23 +166,16 @@ fun ComposerBody(
                 }
             }
         }
-        Row(
+
+        Column(
             Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.surface),
-            verticalAlignment = Alignment.Bottom,
+                .clip(RoundedCornerShape(16.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
-            IconButton(onClick = { attachOpen = true }, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    Icons.Outlined.AttachFile,
-                    contentDescription = "прикрепить",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Box(Modifier.weight(1f).padding(vertical = 11.dp, horizontal = 2.dp)) {
+            Box(Modifier.fillMaxWidth()) {
                 BasicTextField(
                     value = value,
                     onValueChange = {
@@ -223,52 +189,99 @@ fun ComposerBody(
                     keyboardActions = KeyboardActions(),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 20.dp, max = 150.dp)
+                        .heightIn(min = 22.dp, max = 150.dp)
                         .focusRequester(focusRequester),
                 )
                 if (value.isEmpty()) {
                     Text(
-                        if (directory.isBlank()) "Выберите папку в меню…" else "Спроси что угодно… / команды",
+                        if (directory.isBlank()) "Choose a folder in the menu…" else "Ask anything… / commands",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
                     )
                 }
             }
-            if (running) {
-                IconButton(onClick = onStop, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Outlined.Stop,
-                        contentDescription = "остановить",
-                        tint = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-            IconButton(
-                onClick = {
-                    if (!canSend) return@IconButton
-                    onSend(value, if (running) delivery else null) { _ -> }
-                },
-                enabled = canSend,
-                modifier = Modifier.padding(end = 5.dp, bottom = 5.dp).size(34.dp),
+            Spacer(Modifier.height(4.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
                     Modifier
-                        .size(34.dp)
+                        .size(32.dp)
                         .clip(CircleShape)
-                        .background(
-                            if (canSend) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant,
-                        ),
+                        .clickableNoRipple { attachOpen = true },
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        Icons.Outlined.ArrowUpward,
-                        contentDescription = "отправить",
-                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
+                        Icons.Outlined.AttachFile,
+                        contentDescription = "Attach file",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp),
                     )
+                }
+                Spacer(Modifier.weight(1f))
+                if (running) {
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(999.dp)),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(width = 38.dp, height = 34.dp)
+                                .clickableNoRipple(onStop),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.Stop,
+                                contentDescription = "Stop the run",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(17.dp),
+                            )
+                        }
+                        Box(
+                            Modifier
+                                .size(width = 40.dp, height = 34.dp)
+                                .background(
+                                    if (canSend) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                )
+                                .clickableNoRipple {
+                                    if (canSend) onSend(value, "queue") { _ -> }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                Icons.Outlined.ArrowUpward,
+                                contentDescription = "Send after this run",
+                                tint = if (canSend) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                } else {
+                    Box(
+                        Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (canSend) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                            )
+                            .clickableNoRipple {
+                                if (canSend) onSend(value, null) { _ -> }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Outlined.ArrowUpward,
+                            contentDescription = "Send",
+                            tint = if (canSend) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
         }

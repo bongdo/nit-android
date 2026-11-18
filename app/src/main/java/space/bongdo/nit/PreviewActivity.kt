@@ -49,7 +49,7 @@ class PreviewActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
-        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "Файл" }
+        val title = intent.getStringExtra(EXTRA_TITLE).orEmpty().ifBlank { "File" }
         setTaskDescription(ActivityManager.TaskDescription(title))
         val file = File(intent.getStringExtra(EXTRA_PATH).orEmpty())
         val kind = intent.getStringExtra(EXTRA_KIND)?.takeIf { it.isNotBlank() } ?: PreviewKind.FILE

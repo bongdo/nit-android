@@ -34,9 +34,9 @@ val THEME_IDS = listOf(
 )
 
 fun themeLabel(id: String): String = when (id) {
-    "system" -> "Системная"
-    "light" -> "Стоковая светлая"
-    "dark" -> "Стоковая тёмная"
+    "system" -> "System"
+    "light" -> "Default light"
+    "dark" -> "Default dark"
     "nord" -> "Nord"
     "solarized" -> "Solarized"
     "gruvbox" -> "Gruvbox"
@@ -48,7 +48,7 @@ fun themeLabel(id: String): String = when (id) {
     "mist" -> "Mist"
     "ash" -> "Ash"
     "ash-dark" -> "Ash dark"
-    else -> "Системная"
+    else -> "System"
 }
 
 fun themeIsDark(id: String, systemDark: Boolean): Boolean = when (id) {

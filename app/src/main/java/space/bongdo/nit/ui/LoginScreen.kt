@@ -73,7 +73,7 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
             Text("nit", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(4.dp))
             Text(
-                "чат с агентами на твоём сервере",
+                "chat with agents on your server",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -82,7 +82,7 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
             Field(
                 value = server,
                 onValueChange = { server = it },
-                label = "Сервер",
+                label = "Server",
                 placeholder = "https://bongdo.space/nit",
                 keyboard = KeyboardType.Uri,
                 ime = ImeAction.Next,
@@ -91,7 +91,7 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
             Field(
                 value = user,
                 onValueChange = { user = it },
-                label = "Имя",
+                label = "Name",
                 placeholder = "bongdo",
                 ime = ImeAction.Next,
             )
@@ -99,7 +99,7 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
             Field(
                 value = password,
                 onValueChange = { password = it },
-                label = "Пароль",
+                label = "Password",
                 placeholder = "••••••••",
                 password = true,
                 ime = ImeAction.Next,
@@ -108,7 +108,7 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
             Field(
                 value = code,
                 onValueChange = { code = it },
-                label = "Код 2FA, если включён",
+                label = "2FA code, if enabled",
                 placeholder = "000000",
                 keyboard = KeyboardType.NumberPassword,
                 ime = ImeAction.Done,
@@ -140,12 +140,12 @@ fun LoginScreen(state: UiState, viewModel: AppViewModel) {
                         color = MaterialTheme.colorScheme.onPrimary,
                     )
                 } else {
-                    Text("Войти", style = MaterialTheme.typography.titleMedium)
+                    Text("Sign in", style = MaterialTheme.typography.titleMedium)
                 }
             }
             Spacer(Modifier.height(22.dp))
             Text(
-                "Пароль проверяет сервер. Приложение хранит только сессионную cookie в Keystore.",
+                "The server verifies the password. The app stores only the session cookie in Keystore.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

@@ -91,7 +91,7 @@ fun MorphDock(
     var settleJob by remember { mutableStateOf<Job?>(null) }
     var dragStartProgress by remember { mutableFloatStateOf(0f) }
 
-    val tonguePx = with(density) { 32.dp.toPx() }
+    val tonguePx = with(density) { 14.dp.toPx() }
     val spacerPx = with(density) { 10.dp.toPx() }
     val searchPx = with(density) { 52.dp.toPx() }
     val expandedPx = with(density) { expandedHeight.toPx() }
@@ -187,9 +187,9 @@ fun MorphDock(
             )
             .background(
                 lerp(
-                    MaterialTheme.colorScheme.background,
+                    androidx.compose.ui.graphics.Color.Transparent,
                     MaterialTheme.colorScheme.surface,
-                    smooth(progress, 0.1f, 0.6f),
+                    smooth(progress, 0.12f, 0.62f),
                 ),
             ),
     ) {
@@ -199,29 +199,15 @@ fun MorphDock(
                 .height(with(density) { tonguePx.toDp() })
                 .pointerInput(Unit) { detectTapGestures { onToggleState.value() } }
                 .then(dragModifier()),
-            contentAlignment = Alignment.BottomCenter,
+            contentAlignment = Alignment.Center,
         ) {
             Box(
                 Modifier
-                    .width(66.dp)
-                    .height(21.dp)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 5.dp, bottomEnd = 5.dp))
-                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.22f))
-                    .border(
-                        1.dp,
-                        MaterialTheme.colorScheme.outline.copy(alpha = 0.14f),
-                        RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp, bottomStart = 5.dp, bottomEnd = 5.dp),
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    Modifier
-                        .width(30.dp)
-                        .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
-                )
-            }
+                    .width(34.dp)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+            )
         }
 
         Box(
@@ -306,7 +292,7 @@ private fun SearchRow(
                     Box {
                         if (query.isEmpty()) {
                             Text(
-                                "Поиск по чатам",
+                                "Search chats",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                             )
@@ -319,7 +305,7 @@ private fun SearchRow(
                 IconButton(onClick = { onQueryChange("") }) {
                     Icon(
                         Icons.Outlined.Close,
-                        contentDescription = "очистить",
+                        contentDescription = "clear",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
@@ -328,13 +314,13 @@ private fun SearchRow(
             IconButton(onClick = onClose) {
                 Icon(
                     Icons.Outlined.KeyboardArrowDown,
-                    contentDescription = "свернуть",
+                    contentDescription = "collapse",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         } else {
             Text(
-                query.ifEmpty { "Поиск по чатам" },
+                query.ifEmpty { "Search chats" },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 maxLines = 1,

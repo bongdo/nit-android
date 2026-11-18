@@ -80,7 +80,7 @@ private fun normalizeQuestion(value: JsonElement): QuestionRecord? {
     val options = normalizeOptions(value["options"])
     if (question.isBlank() && options.isEmpty()) return null
     val header = (value["header"] as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
-    return QuestionRecord(header = header, question = question.ifBlank { "Вопрос" }, options = options)
+    return QuestionRecord(header = header, question = question.ifBlank { "Question" }, options = options)
 }
 
 private fun normalizeOptions(value: JsonElement?): List<QuestionOption> {
@@ -156,7 +156,7 @@ fun QuestionCard(questions: List<QuestionRecord>, modifier: Modifier = Modifier)
                                     )
                                     Spacer(Modifier.width(6.dp))
                                     Column {
-                                        Text("ассистент", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                                        Text("assistant", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                                         Text(
                                             item.question,
                                             style = MaterialTheme.typography.labelSmall,

@@ -17,8 +17,8 @@ class NotificationHelper(private val context: Context) {
     init {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL, "Агент", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "Вопросы и завершённые ходы"
+                NotificationChannel(CHANNEL, "Agent", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                    description = "Questions and finished runs"
                 },
             )
         }
@@ -28,10 +28,10 @@ class NotificationHelper(private val context: Context) {
         ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
 
     fun waiting(title: String, body: String, session: String) =
-        post("Ждёт ответа", title, body, 1000 + session.hashCode(), session)
+        post("Waiting for you", title, body, 1000 + session.hashCode(), session)
 
     fun done(title: String, body: String, session: String) =
-        post("Готово", title, body, 2000 + session.hashCode(), session)
+        post("Done", title, body, 2000 + session.hashCode(), session)
 
     fun cancelWaiting(session: String) {
         runCatching { NotificationManagerCompat.from(context).cancel(1000 + session.hashCode()) }

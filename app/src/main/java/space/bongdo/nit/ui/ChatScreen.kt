@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.core.content.ContextCompat
@@ -38,11 +39,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.core.RepeatMode
@@ -77,6 +80,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import space.bongdo.nit.data.Message
+import space.bongdo.nit.data.Session
 import space.bongdo.nit.data.UserFile
 import java.io.File
 
@@ -88,6 +92,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     var themeOpen by rememberSaveable { mutableStateOf(false) }
     var topMenuOpen by rememberSaveable { mutableStateOf(false) }
     var sessionsQuery by rememberSaveable { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<Session?>(null) }
     var dockProgress by remember { mutableFloatStateOf(0f) }
     var dockJob by remember { mutableStateOf<Job?>(null) }
     val listState = rememberLazyListState()
@@ -110,7 +115,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         val firstUser = state.messages.firstOrNull { it.type == "user" }
         state.selected?.title?.takeIf { it.isNotBlank() }
             ?: firstUser?.text?.trim()?.lineSequence()?.firstOrNull()?.take(80)
-            ?: "Новый чат"
+            ?: "New chat"
     }
     val directory = state.selected?.location?.directory?.takeIf { it.isNotBlank() }
         ?: state.settings.lastDirectory
@@ -153,6 +158,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
 
     fun openDock() {
+        topMenuOpen = false
         keyboard?.hide()
         focusManager.clearFocus()
         viewModel.refreshSessions(sessionsQuery)
@@ -165,6 +171,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
 
     BackHandler(enabled = dockProgress > 0.5f) { closeDock() }
+    BackHandler(enabled = topMenuOpen) { topMenuOpen = false }
 
     LaunchedEffect(sessionsQuery) {
         if (sessionsListState.layoutInfo.totalItemsCount > 0) sessionsListState.scrollToItem(0)
@@ -220,13 +227,26 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 .distinctUntilChanged()
                 .collect { (scrolling, bottom) -> if (!scrolling && !bottom) userDragged = false }
         }
+        launch {
+            snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
+                .distinctUntilChanged()
+                .collect { (scrolling, forward) ->
+                    if (scrolling && forward && userDragged) {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    }
+                }
+        }
         var previousBottom = atBottom
         snapshotFlow { atBottom }
             .distinctUntilChanged()
             .collect { bottom ->
                 if (bottom != previousBottom) {
                     if (!bottom) {
-                        if (userDragged) focusManager.clearFocus()
+                        if (userDragged) {
+                            focusManager.clearFocus()
+                            keyboard?.hide()
+                        }
                     } else {
                         stick = true
                         if (userDragged) {
@@ -287,7 +307,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                         if (state.loadingOlder) {
                             item("loader") {
                                 Text(
-                                    "загружаю раньше…",
+                                    "Loading earlier…",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.fillMaxWidth().padding(8.dp),
@@ -303,6 +323,10 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                                 stepsLoading = state.loadingSteps,
                                 imageModel = viewModel::imageModel,
                                 onLoadSteps = viewModel::loadSteps,
+                                onRevert = { msg ->
+                                    viewModel.revertTo(msg) { focusRequest += 1 }
+                                },
+                                onFork = { msg -> viewModel.forkAt(msg.id) },
                                 onOpenHtml = { source, title -> viewModel.openHtml(source, title) },
                                 onOpenArtifact = { path, title -> viewModel.openArtifact(path, title) },
                                 onOpenFile = { path, title -> viewModel.openFile(path, title) },
@@ -332,7 +356,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
                             contentColor = MaterialTheme.colorScheme.onSurface,
                         ) {
-                            Icon(Icons.Outlined.ArrowDownward, contentDescription = "вниз", modifier = Modifier.size(20.dp))
+                            Icon(Icons.Outlined.ArrowDownward, contentDescription = "Jump to latest", modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -425,7 +449,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                                         "retry" -> viewModel.retryLast()
                                         "theme" -> themeOpen = true
                                         "clear" -> viewModel.setDraft("")
-                                        "help" -> viewModel.note("Команды: /new /dir /settings /compact /revert /fork /fork-here /retry /theme /clear /help")
+                                        "help" -> viewModel.note("Commands: /new /dir /settings /compact /revert /fork /fork-here /retry /theme /clear /help")
                                     }
                                 },
                             )
@@ -444,10 +468,25 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                                 closeDock()
                                 newChat()
                             },
+                            onSettings = { settingsOpen = true },
+                            onHide = { viewModel.hideSession(it) },
+                            onUnhide = { viewModel.unhideSession(it) },
                         )
                     },
                 )
             }
+        }
+
+        if (topMenuOpen) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.25f))
+                    .pointerInput(Unit) { detectTapGestures { topMenuOpen = false } }
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures { _, _ -> topMenuOpen = false }
+                    },
+            )
         }
 
         Column(
@@ -461,67 +500,85 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     .height(topInset)
                     .background(MaterialTheme.colorScheme.background),
             )
-            ChatTopBar(
-                title = title,
-                directory = directory,
-                cost = state.selected?.cost ?: 0.0,
-                context = contextPercent(state).takeIf { it > 0 }?.let { "ctx $it%" } ?: "",
-                contextProgress = contextPercent(state) / 100f,
-                connected = state.healthOk && state.streamStatus == StreamStatus.Online,
-                connecting = state.streamStatus == StreamStatus.Connecting,
-                parent = state.selected?.parentID != null,
-                onParent = {
-                    closeDock()
-                    viewModel.backToParent()
-                },
-                onNew = {
-                    closeDock()
-                    newChat()
-                },
-                onSwipeDown = {
-                    closeDock()
-                    topMenuOpen = true
-                },
-            )
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
+                ChatTopBar(
+                    title = title,
+                    directory = directory,
+                    cost = state.selected?.cost ?: 0.0,
+                    context = contextPercent(state).takeIf { it > 0 }?.let { "ctx $it%" } ?: "",
+                    contextProgress = contextPercent(state) / 100f,
+                    connected = state.healthOk && state.streamStatus == StreamStatus.Online,
+                    connecting = state.streamStatus == StreamStatus.Connecting,
+                    parent = state.selected?.parentID != null,
+                    onParent = {
+                        closeDock()
+                        viewModel.backToParent()
+                    },
+                    onToggleMenu = {
+                        if (!topMenuOpen) closeDock()
+                        topMenuOpen = !topMenuOpen
+                    },
+                    onSwipeDown = {
+                        closeDock()
+                        topMenuOpen = true
+                    },
+                )
+                androidx.compose.animation.AnimatedVisibility(visible = topMenuOpen) {
+                    ChatMenuPanel(
+                        hasSelection = state.selected != null,
+                        running = state.running,
+                        onCompact = {
+                            topMenuOpen = false
+                            viewModel.compactSession()
+                        },
+                        onFork = {
+                            topMenuOpen = false
+                            viewModel.forkLastUser()
+                        },
+                        onRetry = {
+                            topMenuOpen = false
+                            viewModel.retryLast()
+                        },
+                        onHide = {
+                            topMenuOpen = false
+                            state.selected?.let { viewModel.hideSession(it.id) }
+                        },
+                        onDelete = {
+                            topMenuOpen = false
+                            deleteTarget = state.selected
+                        },
+                    )
+                }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                )
+            }
             if (!state.healthOk) {
-                Banner("Нет связи с сервером. Повторяем…", viewModel::retryConnection, action = "повторить")
+                Banner("No connection to the server. Retrying…", viewModel::retryConnection, action = "Retry")
             } else {
                 state.banner?.let { Banner(it, viewModel::dismissBanner) }
             }
         }
     }
 
-    if (topMenuOpen) {
-        ChatMenuSheet(
-            hasParent = state.selected?.parentID != null,
-            children = state.children,
-            runningIds = state.runningIds,
-            onDismiss = { topMenuOpen = false },
-            onOpenSubagent = { child ->
-                topMenuOpen = false
-                viewModel.openSubagent(child)
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete chat?") },
+            text = { Text("This chat will be permanently deleted.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        deleteTarget = null
+                        viewModel.deleteSession(target.id)
+                    },
+                ) { Text("Delete") }
             },
-            onAction = { action ->
-                topMenuOpen = false
-                when (action) {
-                    "new" -> {
-                        newChat()
-                    }
-                    "dir" -> {
-                        pickerCreates = false
-                        pickerOpen = true
-                        viewModel.loadProjects()
-                    }
-                    "settings" -> settingsOpen = true
-                    "theme" -> themeOpen = true
-                    "compact" -> viewModel.compactSession()
-                    "revert" -> viewModel.revertLast()
-                    "fork" -> viewModel.forkLastUser()
-                    "fork-here" -> viewModel.forkAt(null)
-                    "retry" -> viewModel.retryLast()
-                    "parent" -> viewModel.backToParent()
-                    "chats" -> openDock()
-                }
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
             },
         )
     }
@@ -552,10 +609,12 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         )
     }
     if (pickerOpen) {
-        DirectorySheet(
+        DirectoryPicker(
             state = state,
             create = pickerCreates,
+            banner = state.banner,
             onDismiss = { pickerOpen = false },
+            onDismissBanner = viewModel::dismissBanner,
             onLoad = viewModel::loadFolders,
             onPick = { path ->
                 pickerOpen = false
@@ -574,36 +633,28 @@ private fun ChatTopBar(
     contextProgress: Float,
     connected: Boolean,
     connecting: Boolean,
-    onNew: () -> Unit,
     parent: Boolean,
     onParent: () -> Unit,
+    onToggleMenu: () -> Unit,
     onSwipeDown: () -> Unit,
 ) {
     var dragY by remember { mutableStateOf(0f) }
     Box(
         Modifier
             .fillMaxWidth()
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.background,
-                        MaterialTheme.colorScheme.background.copy(alpha = 0.9f),
-                        androidx.compose.ui.graphics.Color.Transparent,
-                    ),
-                ),
-            )
+            .pointerInput(Unit) { detectTapGestures { onToggleMenu() } }
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
                     onDragStart = { dragY = 0f },
                     onVerticalDrag = { change, amount -> dragY += amount; change.consume() },
                     onDragEnd = {
-                        if (dragY > 56f) onSwipeDown()
+                        if (dragY > 40f) onSwipeDown()
                         dragY = 0f
                     },
                     onDragCancel = { dragY = 0f },
                 )
             }
-            .padding(bottom = 10.dp),
+            .padding(bottom = 8.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(start = 6.dp, end = 4.dp, top = 4.dp),
@@ -611,7 +662,7 @@ private fun ChatTopBar(
         ) {
         if (parent) {
             IconButton(onClick = onParent) {
-                Icon(Icons.Outlined.ArrowBack, contentDescription = "к родителю", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Outlined.ArrowBack, contentDescription = "Back to parent", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         Column(Modifier.weight(1f)) {
@@ -677,9 +728,6 @@ private fun ChatTopBar(
                     },
                 ),
         )
-        IconButton(onClick = onNew) {
-            Icon(Icons.Outlined.Add, contentDescription = "новый чат", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
         }
     }
 }
@@ -728,10 +776,10 @@ private fun EmptyChat(directory: String) {
     ) {
         SparkMark(46)
         Spacer(Modifier.height(16.dp))
-        Text("Спроси что угодно", style = MaterialTheme.typography.titleMedium)
+        Text("Ask anything", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(6.dp))
         Text(
-            "Код, таблицы и HTML-превью рендерятся в чате.",
+            "Code, tables, and HTML previews render in chat.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

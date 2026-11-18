@@ -74,16 +74,16 @@ fun QuestionAnswerBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        form.title.ifBlank { current.title ?: "Вопрос" },
+                        form.title.ifBlank { current.title ?: "Question" },
                         style = MaterialTheme.typography.titleMedium,
                     )
                     Text(
-                        if (fields.size > 1) "Вопрос ${step + 1} из ${fields.size} · агент ждёт ответа" else "Агент ждёт ответа",
+                        if (fields.size > 1) "Question ${step + 1} of ${fields.size} · agent is waiting" else "Agent is waiting for you",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                TextButton(onClick = { onCancel(form) }) { Text("Отмена") }
+                TextButton(onClick = { onCancel(form) }) { Text("Cancel") }
             }
             Spacer(Modifier.height(4.dp))
             Text(current.title ?: current.key, style = MaterialTheme.typography.bodyMedium)
@@ -139,7 +139,7 @@ fun QuestionAnswerBar(
                 )
                 if (values[current.key].orEmpty().isBlank()) {
                     Text(
-                        current.placeholder ?: "Свой ответ…",
+                        current.placeholder ?: "Your answer…",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     )
@@ -147,19 +147,19 @@ fun QuestionAnswerBar(
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 if (step > 0) {
-                    TextButton(onClick = { step -= 1 }) { Text("Назад") }
+                    TextButton(onClick = { step -= 1 }) { Text("Back") }
                 }
                 val filled = values[current.key].orEmpty().isNotBlank()
                 if (step < fields.size - 1) {
                     TextButton(
                         onClick = { step += 1 },
                         enabled = current.required != true || filled,
-                    ) { Text("Дальше") }
+                    ) { Text("Next") }
                 } else {
                     TextButton(
                         onClick = { submit() },
                         enabled = current.required != true || filled,
-                    ) { Text("Ответить") }
+                    ) { Text("Answer") }
                 }
             }
         }

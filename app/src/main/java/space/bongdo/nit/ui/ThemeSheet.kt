@@ -50,9 +50,9 @@ fun ThemeSheet(
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 26.dp)) {
-            Text("Тема", style = MaterialTheme.typography.titleMedium)
+            Text("Theme", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Цвет фона, поверхностей, акцента и подсветки кода.",
+                "Background, surfaces, accent, and code highlight colors.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -144,7 +144,7 @@ private fun ThemeTile(
             }
         }
         Text(
-            if (dark) "тёмная" else "светлая",
+            if (dark) "dark" else "light",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

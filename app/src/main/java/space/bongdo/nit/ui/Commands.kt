@@ -3,15 +3,15 @@ package space.bongdo.nit.ui
 data class SlashCommand(val id: String, val description: String)
 
 val SLASH_COMMANDS = listOf(
-    SlashCommand("new", "Новый чат в этой папке"),
-    SlashCommand("dir", "Сменить папку по умолчанию"),
-    SlashCommand("settings", "Модель, агент, тема"),
-    SlashCommand("compact", "Сжать контекст сессии"),
-    SlashCommand("revert", "Откатить последнее сообщение и вернуть в черновик"),
-    SlashCommand("fork", "Форкнуть перед последним сообщением"),
-    SlashCommand("fork-here", "Форкнуть в конце, сохранив всё"),
-    SlashCommand("retry", "Повторить последний промпт"),
-    SlashCommand("theme", "Выбрать тему"),
-    SlashCommand("clear", "Очистить ввод"),
-    SlashCommand("help", "Показать команды"),
+    SlashCommand("new", "New chat in this folder"),
+    SlashCommand("dir", "Change the default folder"),
+    SlashCommand("settings", "Model, agent, theme"),
+    SlashCommand("compact", "Compact the session context"),
+    SlashCommand("revert", "Revert the last message and restore the draft"),
+    SlashCommand("fork", "Fork before the last message"),
+    SlashCommand("fork-here", "Fork at the end, keeping everything"),
+    SlashCommand("retry", "Retry the last prompt"),
+    SlashCommand("theme", "Choose theme"),
+    SlashCommand("clear", "Clear input"),
+    SlashCommand("help", "Show commands"),
 )

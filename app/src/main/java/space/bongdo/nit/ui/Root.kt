@@ -111,14 +111,14 @@ fun shortTime(epochMillis: Long): String {
 fun byteLabel(bytes: Long?): String {
     val value = bytes ?: return ""
     return when {
-        value >= 1_048_576 -> String.format(java.util.Locale.ROOT, "%.1f МБ", value / 1_048_576.0)
-        value >= 1024 -> String.format(java.util.Locale.ROOT, "%.0f КБ", value / 1024.0)
-        else -> "$value Б"
+        value >= 1_048_576 -> String.format(java.util.Locale.ROOT, "%.1f MB", value / 1_048_576.0)
+        value >= 1024 -> String.format(java.util.Locale.ROOT, "%.0f KB", value / 1024.0)
+        else -> "$value B"
     }
 }
 
 @Composable
-fun Banner(text: String, onDismiss: () -> Unit, action: String = "ок") {
+fun Banner(text: String, onDismiss: () -> Unit, action: String = "ok") {
     Surface(
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,

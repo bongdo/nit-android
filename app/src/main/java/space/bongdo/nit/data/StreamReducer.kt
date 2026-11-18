@@ -166,7 +166,7 @@ object StreamReducer {
                                             message = error.string("message"),
                                         )
                                     }.getOrNull()
-                                } ?: ToolError(message = "инструмент завершился с ошибкой"),
+                                } ?: ToolError(message = "The tool failed"),
                             ),
                         )
                     }
@@ -194,7 +194,7 @@ object StreamReducer {
                                 retryAfterMs = error.long("retryAfterMs"),
                             )
                         }.getOrNull()
-                    } ?: MessageError(message = "шаг завершился с ошибкой"),
+                    } ?: MessageError(message = "The step failed"),
                 )
             }
 

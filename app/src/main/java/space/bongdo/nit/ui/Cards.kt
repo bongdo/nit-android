@@ -97,13 +97,13 @@ fun PermissionStrip(requests: List<PermissionRequest>, onReply: (PermissionReque
                         )
                     }
                     Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                        TextButton(onClick = { onReply(request, "reject") }) { Text("Отклонить") }
-                        TextButton(onClick = { onReply(request, "always") }) { Text("Всегда") }
+                        TextButton(onClick = { onReply(request, "reject") }) { Text("Decline") }
+                        TextButton(onClick = { onReply(request, "always") }) { Text("Always") }
                         Button(
                             onClick = { onReply(request, "once") },
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                        ) { Text("Разрешить") }
+                        ) { Text("Allow") }
                     }
                 }
             }
@@ -158,7 +158,7 @@ private fun FormCard(form: FormInfo, onReply: (FormInfo, JsonObject) -> Unit, on
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
             .padding(10.dp),
     ) {
-        Text(form.title.ifBlank { "Вопрос" }, style = MaterialTheme.typography.titleMedium)
+        Text(form.title.ifBlank { "Question" }, style = MaterialTheme.typography.titleMedium)
         form.fields.filter { it.visible(values, checks) }.forEach { field ->
             FormFieldView(field, values, checks)
         }
@@ -166,7 +166,7 @@ private fun FormCard(form: FormInfo, onReply: (FormInfo, JsonObject) -> Unit, on
             Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { onCancel(form) }) { Text("Пропустить") }
+            TextButton(onClick = { onCancel(form) }) { Text("Skip") }
             Button(
                 onClick = {
                     val (answer, problem) = buildAnswer(form, values, checks)
@@ -178,7 +178,7 @@ private fun FormCard(form: FormInfo, onReply: (FormInfo, JsonObject) -> Unit, on
                     }
                 },
                 shape = RoundedCornerShape(8.dp),
-            ) { Text("Ответить") }
+            ) { Text("Answer") }
         }
     }
 }
@@ -239,7 +239,7 @@ private fun FormFieldView(
         OutlinedTextField(
             value = values[field.key].orEmpty(),
             onValueChange = { values[field.key] = it },
-            placeholder = (field.placeholder ?: if (field.type == "multiselect") "через запятую" else null)?.let {
+            placeholder = (field.placeholder ?: if (field.type == "multiselect") "comma-separated" else null)?.let {
                 { Text(it, style = MaterialTheme.typography.bodySmall) }
             },
             singleLine = field.type != "textarea",
@@ -275,7 +275,7 @@ private fun buildAnswer(
         val boolean = checks[field.key] ?: false
         val isBoolean = field.type == "boolean" || field.type == "confirm"
         if (!isBoolean && raw.isEmpty()) {
-            if (field.required == true) return null to "Заполните: ${field.title ?: field.key}"
+            if (field.required == true) return null to "Fill in: ${field.title ?: field.key}"
             continue
         }
         answer[field.key] = when (field.type) {

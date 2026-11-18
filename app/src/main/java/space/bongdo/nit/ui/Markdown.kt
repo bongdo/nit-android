@@ -347,7 +347,7 @@ private fun CodeBlock(code: String, language: String?) {
             ) {
                 Icon(
                     imageVector = if (copied) Icons.Outlined.Check else Icons.Outlined.ContentCopy,
-                    contentDescription = if (copied) "Скопировано" else "Копировать",
+                    contentDescription = if (copied) "Copied" else "Copy",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(15.dp),
                 )
@@ -385,7 +385,7 @@ private fun CodeBlock(code: String, language: String?) {
 private fun HtmlFenceCard(content: String, language: String?) {
     val actions = LocalMarkdownActions.current
     HtmlPreviewBlock(
-        title = "HTML-превью",
+        title = "HTML preview",
         source = content,
         onOpen = { actions.onOpenHtml(content, language?.ifBlank { null } ?: "HTML") },
     )
@@ -407,7 +407,7 @@ private fun HtmlPreviewBlock(title: String, source: String, onOpen: () -> Unit) 
             Icon(Icons.Outlined.Language, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(7.dp))
             Text(title, style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
-            Text("открыть окном", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            Text("open in window", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
         }
         HtmlView(
             html = source,
@@ -421,7 +421,7 @@ private fun HtmlPreviewBlock(title: String, source: String, onOpen: () -> Unit) 
 private fun HtmlArtifactCard(artifact: HtmlArtifact) {
     val actions = LocalMarkdownActions.current
     val title = artifact.title.ifBlank {
-        artifact.path.substringAfterLast('/').ifBlank { "HTML-превью" }
+        artifact.path.substringAfterLast('/').ifBlank { "HTML preview" }
     }
     if (artifact.source.isNotBlank()) {
         HtmlPreviewBlock(title = title, source = artifact.source, onOpen = { actions.onOpenHtml(artifact.source, title) })
@@ -446,7 +446,7 @@ private fun HtmlArtifactCard(artifact: HtmlArtifact) {
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "HTML-страница · открыть в новом окне",
+                    "HTML page · open in a new window",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -579,7 +579,7 @@ private fun AnnotatedString.Builder.appendInline(
             val alt = node.findChildOfType(MarkdownElementTypes.INLINE_LINK)
                 ?.findChildOfType(MarkdownElementTypes.LINK_TEXT)
                 ?.getTextInNode(source)?.toString()?.trim()?.trim('[', ']').orEmpty()
-            append(if (alt.isBlank()) "[картинка]" else "[картинка: $alt]")
+            append(if (alt.isBlank()) "[image]" else "[image: $alt]")
         }
         MarkdownTokenTypes.HTML_TAG -> Unit
         // shortcut: reference-style links stay plain text, add a link-definition map when needed

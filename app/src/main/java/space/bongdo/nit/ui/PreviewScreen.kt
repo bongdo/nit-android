@@ -94,7 +94,7 @@ fun PreviewScreen(
                 PreviewTopBar(title, onClose)
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                     when {
-                        !file.exists() -> PreviewMessage("Файл недоступен")
+                        !file.exists() -> PreviewMessage("File unavailable")
                         kind == PreviewKind.HTML -> HtmlContent(file, themeIsDark(theme, androidx.compose.foundation.isSystemInDarkTheme()))
                         kind == PreviewKind.MARKDOWN -> MarkdownContent(file)
                         kind == PreviewKind.TEXT -> TextContent(file)
@@ -125,7 +125,7 @@ private fun PreviewTopBar(title: String, onClose: () -> Unit) {
                 modifier = Modifier.weight(1f),
             )
             IconButton(onClick = onClose) {
-                Icon(Icons.Outlined.Close, contentDescription = "Закрыть")
+                Icon(Icons.Outlined.Close, contentDescription = "Close")
             }
         }
     }
@@ -166,7 +166,7 @@ private fun HtmlContent(file: File, dark: Boolean) {
     val html = text?.getOrNull()
     when {
         text == null -> PreviewLoading()
-        html == null -> PreviewMessage("Не удалось открыть HTML")
+        html == null -> PreviewMessage("Could not open HTML")
         else -> HtmlView(html, Modifier.fillMaxSize(), dark = dark)
     }
 }
@@ -177,7 +177,7 @@ private fun MarkdownContent(file: File) {
     val markdown = text?.getOrNull()
     when {
         text == null -> PreviewLoading()
-        markdown == null -> PreviewMessage("Не удалось прочитать файл")
+        markdown == null -> PreviewMessage("Could not read file")
         else -> SelectionContainer(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         ) {
@@ -192,7 +192,7 @@ private fun TextContent(file: File) {
     val body = text?.getOrNull()
     when {
         text == null -> PreviewLoading()
-        body == null -> PreviewMessage("Не удалось прочитать файл")
+        body == null -> PreviewMessage("Could not read file")
         else -> Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -230,7 +230,7 @@ private fun HighlightedCode(text: String) {
 private fun ImageContent(file: File, title: String) {
     var failed by remember(file) { mutableStateOf(false) }
     if (failed) {
-        PreviewMessage("Не удалось открыть изображение")
+        PreviewMessage("Could not open image")
     } else {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
@@ -297,9 +297,9 @@ private fun PdfContent(file: File) {
         result == null -> PreviewLoading()
         result.isFailure -> PreviewMessage(
             if (result.exceptionOrNull() is SecurityException) {
-                "PDF защищён паролем"
+                "PDF is password-protected"
             } else {
-                "Не удалось открыть PDF"
+                "Could not open PDF"
             },
         )
         else -> {
@@ -325,7 +325,7 @@ private fun PdfPage(pdf: PdfDoc, index: Int) {
     } else {
         Image(
             bitmap = bitmap,
-            contentDescription = "Страница ${index + 1}",
+            contentDescription = "Page ${index + 1}",
             contentScale = ContentScale.FillWidth,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
         )
@@ -356,12 +356,12 @@ private fun AudioContent(file: File) {
             }
             player.setOnErrorListener { _, _, _ ->
                 playing = false
-                error = "Не удалось воспроизвести аудио"
+                error = "Could not play audio"
                 true
             }
             player.prepareAsync()
         }.onFailure {
-            error = "Не удалось открыть аудио"
+            error = "Could not open audio"
         }
         onDispose {
             playing = false
@@ -412,7 +412,7 @@ private fun AudioContent(file: File) {
         ) {
             Icon(
                 imageVector = if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
-                contentDescription = if (playing) "Пауза" else "Воспроизвести",
+                contentDescription = if (playing) "Pause" else "Play",
                 modifier = Modifier.size(30.dp),
             )
         }
@@ -453,7 +453,7 @@ private fun VideoContent(file: File) {
             factory = { context ->
                 VideoView(context).apply {
                     setOnErrorListener { _, _, _ ->
-                        error = "Не удалось воспроизвести видео"
+                        error = "Could not play video"
                         true
                     }
                     setMediaController(MediaController(context).also { it.setAnchorView(this) })
@@ -505,14 +505,14 @@ private fun FileContent(file: File, mime: String?) {
                         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
                 )
             } catch (notFound: ActivityNotFoundException) {
-                error = "Нет приложения для этого типа файла"
+                error = "No app for this file type"
             } catch (invalid: IllegalArgumentException) {
-                error = "Не удалось открыть файл"
+                error = "Could not open file"
             }
         }) {
             Icon(Icons.Outlined.OpenInNew, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Открыть системой")
+            Text("Open with system")
         }
         val message = error
         if (message != null) {

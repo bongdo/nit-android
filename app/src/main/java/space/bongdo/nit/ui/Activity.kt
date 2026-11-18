@@ -8,24 +8,24 @@ import kotlinx.serialization.json.contentOrNull
 import space.bongdo.nit.data.Part
 
 private val VERBS = mapOf(
-    "bash" to "Выполняет",
-    "shell" to "Выполняет",
-    "read" to "Читает",
-    "write" to "Пишет",
-    "edit" to "Правит",
-    "multiedit" to "Правит",
-    "patch" to "Патчит",
-    "grep" to "Ищет",
-    "glob" to "Ищет",
-    "list" to "Смотрит",
-    "ls" to "Смотрит",
-    "task" to "Задача",
-    "webfetch" to "Загружает",
-    "websearch" to "Ищет",
-    "todowrite" to "План",
-    "todoread" to "План",
-    "skill" to "Навык",
-    "question" to "Спрашивает",
+    "bash" to "Running",
+    "shell" to "Running",
+    "read" to "Reading",
+    "write" to "Writing",
+    "edit" to "Editing",
+    "multiedit" to "Editing",
+    "patch" to "Patching",
+    "grep" to "Searching",
+    "glob" to "Searching",
+    "list" to "Looking at",
+    "ls" to "Looking at",
+    "task" to "Task",
+    "webfetch" to "Fetching",
+    "websearch" to "Searching",
+    "todowrite" to "Plan",
+    "todoread" to "Plan",
+    "skill" to "Skill",
+    "question" to "Asking",
 )
 
 fun isActivity(part: Part): Boolean =
@@ -82,7 +82,7 @@ fun toolSummary(part: Part, directory: String? = null): Pair<String, String> {
 fun activityLine(part: Part, directory: String? = null): String {
     if (part.type == "reasoning") {
         val preview = thinkingPreview(part.text)
-        return if (preview.isBlank()) "Думает" else "Думает · $preview"
+        return if (preview.isBlank()) "Thinking" else "Thinking · $preview"
     }
     val (verb, target) = toolSummary(part, directory)
     return if (target.isBlank()) verb else "$verb $target"

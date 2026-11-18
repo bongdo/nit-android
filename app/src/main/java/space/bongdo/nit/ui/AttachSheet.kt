@@ -43,10 +43,10 @@ fun AttachSheet(
         containerColor = MaterialTheme.colorScheme.surface,
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(bottom = 26.dp)) {
-            Text("Прикрепить", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
-            AttachRow(Icons.Outlined.Image, "Фото", "Из галереи", onPhoto)
-            AttachRow(Icons.Outlined.Description, "Документ", "PDF, текст, таблица", onDocument)
-            AttachRow(Icons.Outlined.FolderOpen, "Файл", "Любой файл из хранилища", onFile)
+            Text("Attach", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 4.dp, bottom = 8.dp))
+            AttachRow(Icons.Outlined.Image, "Photo", "From gallery", onPhoto)
+            AttachRow(Icons.Outlined.Description, "Document", "PDF, text, document", onDocument)
+            AttachRow(Icons.Outlined.FolderOpen, "File", "Any file from storage", onFile)
         }
     }
 }
