@@ -147,6 +147,16 @@ class NitApi(
             json.decodeFromString<MessagesPage>(response.body?.string().orEmpty())
         }
 
+    suspend fun message(id: String, messageID: String): Message = withContext(Dispatchers.IO) {
+        val response = call(
+            Request.Builder()
+                .url(api("/api/sessions/$id/messages/$messageID"))
+                .get()
+                .build(),
+        )
+        json.decodeFromString<MessageEnvelope>(response.body?.string().orEmpty()).data
+    }
+
     suspend fun createSession(
         directory: String,
         title: String? = null,
@@ -354,6 +364,11 @@ class NitApi(
         call(Request.Builder().url(url).get().build()).use { it.body?.bytes() ?: ByteArray(0) }
     }
 
+    suspend fun setSessionStatus(id: String, status: String) = post(
+        "/api/ui/sessions/$id/status",
+        buildJsonObject { put("status", status) },
+    )
+
     suspend fun switchModel(id: String, model: ModelRef) = post(
         "/api/sessions/$id/model",
         buildJsonObject { put("model", json.encodeToJsonElement(model)) },
@@ -443,6 +458,9 @@ class NitApi(
 
 @kotlinx.serialization.Serializable
 private data class SessionEnvelope(val data: Session)
+
+@kotlinx.serialization.Serializable
+private data class MessageEnvelope(val data: Message)
 
 @kotlinx.serialization.Serializable
 private data class ArtifactResponse(val path: String = "", val html: String = "")

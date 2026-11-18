@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -19,6 +20,8 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 
 val LocalIsDark = staticCompositionLocalOf { true }
+val LocalSpark = staticCompositionLocalOf { Color.Unspecified }
+val LocalSuccess = staticCompositionLocalOf { Color.Unspecified }
 
 private fun typography(): Typography {
     val base = Typography()
@@ -62,6 +65,8 @@ fun NitTheme(
     CompositionLocalProvider(
         LocalDensity provides Density(density.density, (density.fontScale * fontScale).coerceIn(0.8f, 1.6f)),
         LocalSyntaxPalette provides syntax,
+        LocalSpark provides palette.spark,
+        LocalSuccess provides palette.success,
         LocalIsDark provides dark,
     ) {
         MaterialTheme(colorScheme = colors, typography = typography(), content = content)

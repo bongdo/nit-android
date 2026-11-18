@@ -18,6 +18,7 @@ data class AppSettings(
     val fontScale: Float = 1f,
     val lastDirectory: String = "",
     val lastSession: String = "",
+    val pendingCreate: String = "",
 )
 
 class SettingsStore(private val context: Context) {
@@ -27,6 +28,7 @@ class SettingsStore(private val context: Context) {
         val fontScale = floatPreferencesKey("fontScale")
         val lastDirectory = stringPreferencesKey("lastDirectory")
         val lastSession = stringPreferencesKey("lastSession")
+        val pendingCreate = stringPreferencesKey("pendingCreate")
     }
 
     val flow: Flow<AppSettings> = context.dataStore.data.map { prefs ->
@@ -36,6 +38,7 @@ class SettingsStore(private val context: Context) {
             fontScale = prefs[Keys.fontScale] ?: 1f,
             lastDirectory = prefs[Keys.lastDirectory] ?: "",
             lastSession = prefs[Keys.lastSession] ?: "",
+            pendingCreate = prefs[Keys.pendingCreate] ?: "",
         )
     }
 
@@ -47,6 +50,7 @@ class SettingsStore(private val context: Context) {
                 fontScale = prefs[Keys.fontScale] ?: 1f,
                 lastDirectory = prefs[Keys.lastDirectory] ?: "",
                 lastSession = prefs[Keys.lastSession] ?: "",
+                pendingCreate = prefs[Keys.pendingCreate] ?: "",
             )
             val next = transform(current)
             prefs[Keys.server] = next.server
@@ -54,6 +58,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.fontScale] = next.fontScale
             prefs[Keys.lastDirectory] = next.lastDirectory
             prefs[Keys.lastSession] = next.lastSession
+            prefs[Keys.pendingCreate] = next.pendingCreate
         }
     }
 }

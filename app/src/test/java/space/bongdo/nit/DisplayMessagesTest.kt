@@ -6,6 +6,7 @@ import org.junit.Test
 import space.bongdo.nit.data.Message
 import space.bongdo.nit.data.MessageTime
 import space.bongdo.nit.data.Part
+import space.bongdo.nit.data.ToolState
 import space.bongdo.nit.ui.displayMessages
 
 class DisplayMessagesTest {
@@ -27,9 +28,10 @@ class DisplayMessagesTest {
     }
 
     @Test
-    fun dropsCompletedAssistantWithoutVisibleContent() {
+    fun keepsStepsOnlyAssistantWhileIdle() {
         val display = displayMessages(listOf(assistant("a1", "", tool = true)), running = false)
-        assertTrue(display.isEmpty())
+        assertEquals(1, display.size)
+        assertEquals(1, display[0].shownSteps)
     }
 
     @Test
@@ -71,5 +73,43 @@ class DisplayMessagesTest {
         assertEquals("user", display[0].type)
         assertEquals("assistant", display[1].type)
         assertEquals("answer", display[1].content!!.first { it.type == "text" }.text)
+    }
+
+    @Test
+    fun sumsMarkersAndLoadedActivity() {
+        val light = assistant("a1", "one").copy(steps = 3, tools = 2)
+        val full = Message(
+            id = "a2",
+            type = "assistant",
+            time = MessageTime(created = 2),
+            content = listOf(
+                Part(type = "reasoning", text = "hm"),
+                Part(type = "tool", id = "t1", name = "read", state = ToolState(status = "completed")),
+                Part(type = "text", text = "done"),
+            ),
+        )
+        val display = displayMessages(listOf(light, full), running = false, details = mapOf("a2" to full))
+        assertEquals(1, display.size)
+        assertEquals(5, display[0].shownSteps)
+        assertEquals(3, display[0].shownTools)
+        assertEquals(listOf("a1", "a2"), display[0].sourceIDs)
+    }
+
+    @Test
+    fun loadedDetailsReplaceMarkerCount() {
+        val light = assistant("a1", "").copy(steps = 2, tools = 2)
+        val full = Message(
+            id = "a1",
+            type = "assistant",
+            time = MessageTime(created = 1),
+            content = listOf(
+                Part(type = "reasoning", text = "thinking"),
+                Part(type = "text", text = "answer"),
+            ),
+        )
+        val display = displayMessages(listOf(light), running = false, details = mapOf("a1" to full))
+        assertEquals(1, display[0].shownSteps)
+        assertEquals(0, display[0].shownTools)
+        assertEquals("answer", display[0].content!!.last { it.type == "text" }.text)
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -22,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -69,6 +71,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,18 +84,15 @@ import space.bongdo.nit.data.ModelRef
 import space.bongdo.nit.data.Session
 import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SessionsSheet(
+fun SessionsContent(
     state: UiState,
-    onDismiss: () -> Unit,
+    query: String,
+    listState: androidx.compose.foundation.lazy.LazyListState,
     onSelect: (String) -> Unit,
-    onSearch: (String) -> Unit,
     onNew: () -> Unit,
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
     var allDirectories by rememberSaveable { mutableStateOf(true) }
-    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val selectedDirectory = state.selected?.location?.directory ?: state.settings.lastDirectory
     val scoped = remember(state.sessions, state.hidden, query, allDirectories, selectedDirectory) {
         state.sessions.filter { session ->
@@ -103,181 +104,321 @@ fun SessionsSheet(
                     session.id.contains(query, ignoreCase = true))
         }
     }
-    val waiting = scoped.filter { state.waitingIds.contains(it.id) }
-    val done = scoped.filter { state.status[it.id] == "done" && !state.waitingIds.contains(it.id) }
-    val failed = scoped.filter { state.status[it.id] == "failed" && !state.waitingIds.contains(it.id) }
-    val running = scoped.filter {
-        state.runningIds.contains(it.id) && !state.waitingIds.contains(it.id) && state.status[it.id] == null
+    val waiting = scoped.filter {
+        state.waitingIds.contains(it.id) && it.id != state.selected?.id
     }
-    val hoisted = (waiting + done + failed + running).map { it.id }.toSet()
+    val running = scoped.filter {
+        state.runningIds.contains(it.id) && !state.waitingIds.contains(it.id)
+    }
+    val failed = scoped.filter {
+        state.status[it.id] == "failed" &&
+            !state.waitingIds.contains(it.id) &&
+            !state.runningIds.contains(it.id)
+    }
+    val done = scoped.filter {
+        state.status[it.id] == "done" &&
+            !state.waitingIds.contains(it.id) &&
+            !state.runningIds.contains(it.id)
+    }
+    val finished = (waiting + failed + done)
+        .distinctBy { it.id }
+        .sortedWith(compareBy({ finishRank(it, state) }, { -it.time.updated }))
+    val hoisted = finished.map { it.id }.toSet() + running.map { it.id }.toSet()
     val rest = scoped.filterNot { it.id in hoisted }
     val groups = remember(rest) { rest.groupBy { it.location.directory }.toList().sortedBy { it.first } }
-    LaunchedEffect(query) {
-        if (query.length < 2) return@LaunchedEffect
-        delay(350)
-        onSearch(query)
-    }
     val directoryCount = scoped.map { it.location.directory }.distinct().size
+    val waitingCount = waiting.size
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheet,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-    ) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 780.dp)) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp, top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Outlined.Layers, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(9.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("Все чаты", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "$directoryCount ${plural(directoryCount, "папка", "папки", "папок")} · ${scoped.size} ${plural(scoped.size, "чат", "чата", "чатов")}" +
-                            if (running.isNotEmpty()) " · ${running.size} работает" else "",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Outlined.Close, contentDescription = "закрыть", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ScopeTab("Все", allDirectories) { allDirectories = true }
             if (selectedDirectory.isNotBlank()) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)) {
-                    ScopeTab("Все", allDirectories) { allDirectories = true }
-                    Spacer(Modifier.width(6.dp))
-                    ScopeTab(File(selectedDirectory).name.ifBlank { selectedDirectory }, !allDirectories) { allDirectories = false }
+                Spacer(Modifier.width(6.dp))
+                ScopeTab(File(selectedDirectory).name.ifBlank { selectedDirectory }, !allDirectories) {
+                    allDirectories = false
                 }
             }
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it; if (it.isBlank()) onSearch("") },
-                placeholder = { Text("Поиск по названию, папке или id", style = MaterialTheme.typography.bodySmall) },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(17.dp)) },
-                trailingIcon = if (query.isNotBlank()) {
-                    { Icon(Icons.Outlined.Close, contentDescription = "очистить", modifier = Modifier.size(16.dp).clickableNoRipple { query = ""; onSearch("") }) }
-                } else null,
-                singleLine = true,
-                shape = RoundedCornerShape(10.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { onSearch(query) }),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                ),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp),
+            Spacer(Modifier.weight(1f))
+            Text(
+                "$directoryCount ${plural(directoryCount, "папка", "папки", "папок")} · ${scoped.size}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 3.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .clickable(onClick = onNew)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                    .padding(horizontal = 11.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Outlined.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Новый чат", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                Text(
-                    if (selectedDirectory.isBlank()) "выбрать папку" else File(selectedDirectory).name.ifBlank { selectedDirectory },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+            IconButton(onClick = onNew) {
+                Icon(
+                    Icons.Outlined.Add,
+                    contentDescription = "новый чат",
+                    tint = MaterialTheme.colorScheme.primary,
                 )
             }
-            LazyColumn(Modifier.weight(1f, fill = false)) {
-                if (waiting.isNotEmpty()) {
-                    item("waiting-head") { GroupHeader("Ждут ответа", waiting.size, Icons.Outlined.PriorityHigh, accent = true) }
-                    items(waiting, key = { "wait-${it.id}" }) { session ->
-                        SessionRow(
-                            session = session,
-                            running = state.runningIds.contains(session.id),
-                            selected = state.selected?.id == session.id,
-                            draft = state.drafts.contains(session.id),
-                            waiting = true,
-                            onClick = { onSelect(session.id) },
-                            accent = true,
-                        )
-                    }
-                }
-                if (done.isNotEmpty()) {
-                    item("done-head") { GroupHeader("Готовы", done.size, Icons.Outlined.Check, accent = true) }
-                    items(done, key = { "done-${it.id}" }) { session ->
-                        SessionRow(
-                            session = session,
-                            running = false,
-                            selected = state.selected?.id == session.id,
-                            draft = state.drafts.contains(session.id),
-                            waiting = false,
-                            onClick = { onSelect(session.id) },
-                            accent = true,
-                        )
-                    }
-                }
-                if (failed.isNotEmpty()) {
-                    item("failed-head") { GroupHeader("С ошибкой", failed.size, Icons.Outlined.ErrorOutline, accent = true) }
-                    items(failed, key = { "failed-${it.id}" }) { session ->
-                        SessionRow(
-                            session = session,
-                            running = false,
-                            selected = state.selected?.id == session.id,
-                            draft = state.drafts.contains(session.id),
-                            waiting = false,
-                            onClick = { onSelect(session.id) },
-                            accent = true,
-                            failed = true,
-                        )
-                    }
-                }
-                if (running.isNotEmpty()) {
-                    item("running-head") { GroupHeader("Работают", running.size, Icons.Outlined.PlayArrow) }
-                    items(running, key = { "run-${it.id}" }) { session ->
-                        SessionRow(
-                            session = session,
-                            running = true,
-                            selected = state.selected?.id == session.id,
-                            draft = state.drafts.contains(session.id),
-                            waiting = state.waitingIds.contains(session.id),
-                            onClick = { onSelect(session.id) },
-                        )
-                    }
-                }
-                groups.forEach { (directory, sessions) ->
-                    item("head-$directory") {
-                        GroupHeader(File(directory).name.ifBlank { directory }, sessions.size, Icons.Outlined.Folder)
-                    }
-                    items(sessions, key = { it.id }) { session ->
-                        SessionRow(
-                            session = session,
-                            running = false,
-                            selected = state.selected?.id == session.id,
-                            draft = state.drafts.contains(session.id),
-                            waiting = state.waitingIds.contains(session.id),
-                            onClick = { onSelect(session.id) },
-                        )
-                    }
-                }
-                if (scoped.isEmpty()) {
-                    item("empty") {
-                        Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Outlined.Layers, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(26.dp))
-                            Spacer(Modifier.height(8.dp))
-                            Text(if (state.searching) "Ищу…" else "Пусто", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Начните новый чат или измените фильтр.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                item("bottom-space") { Spacer(Modifier.height(24.dp)) }
+        }
+        if (waitingCount > 0) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    Modifier
+                        .size(5.dp)
+                        .clip(CircleShape)
+                        .background(attentionColor()),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "$waitingCount ${plural(waitingCount, "чат ждёт", "чата ждут", "чатов ждут")} ответа",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = attentionColor(),
+                )
             }
         }
+
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 28.dp),
+        ) {
+            if (finished.isNotEmpty()) {
+                item("finished-head") {
+                    GroupHeader("Ждут и готовы", finished.size, Icons.Outlined.PriorityHigh, accent = true)
+                }
+                items(finished, key = { "fin-${it.id}" }) { session ->
+                    SessionRow(
+                        session = session,
+                        kind = when {
+                            state.waitingIds.contains(session.id) -> SessionKind.WAITING
+                            state.status[session.id] == "failed" -> SessionKind.FAILED
+                            else -> SessionKind.DONE
+                        },
+                        selected = state.selected?.id == session.id,
+                        draft = state.drafts.contains(session.id),
+                        onClick = { onSelect(session.id) },
+                    )
+                }
+            }
+            if (running.isNotEmpty()) {
+                item("running-head") { GroupHeader("Работают", running.size, Icons.Outlined.PlayArrow) }
+                items(running, key = { "run-${it.id}" }) { session ->
+                    SessionRow(
+                        session = session,
+                        kind = SessionKind.RUNNING,
+                        selected = state.selected?.id == session.id,
+                        draft = state.drafts.contains(session.id),
+                        onClick = { onSelect(session.id) },
+                    )
+                }
+            }
+            groups.forEach { (directory, sessions) ->
+                item("head-$directory") {
+                    GroupHeader(File(directory).name.ifBlank { directory }, sessions.size, Icons.Outlined.Folder)
+                }
+                items(sessions, key = { it.id }) { session ->
+                    SessionRow(
+                        session = session,
+                        kind = SessionKind.NONE,
+                        selected = state.selected?.id == session.id,
+                        draft = state.drafts.contains(session.id),
+                        onClick = { onSelect(session.id) },
+                    )
+                }
+            }
+            if (scoped.isEmpty()) {
+                item("empty") {
+                    Column(
+                        Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            Icons.Outlined.Layers,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(26.dp),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (state.searching) "Ищу…" else "Пусто",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "Начните новый чат или измените фильтр.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun finishRank(session: Session, state: UiState): Int = when {
+    state.waitingIds.contains(session.id) -> 0
+    state.status[session.id] == "failed" -> 1
+    else -> 2
+}
+
+enum class SessionKind { NONE, RUNNING, WAITING, DONE, FAILED }
+
+@Composable
+private fun attentionColor(): androidx.compose.ui.graphics.Color {
+    val spark = LocalSpark.current
+    return if (spark == androidx.compose.ui.graphics.Color.Unspecified) {
+        MaterialTheme.colorScheme.tertiary
+    } else {
+        spark
+    }
+}
+
+@Composable
+private fun successColor(): androidx.compose.ui.graphics.Color {
+    val success = LocalSuccess.current
+    return if (success == androidx.compose.ui.graphics.Color.Unspecified) {
+        MaterialTheme.colorScheme.tertiary
+    } else {
+        success
+    }
+}
+
+@Composable
+private fun Modifier.sessionGlow(kind: SessionKind): Modifier {
+    if (kind != SessionKind.WAITING && kind != SessionKind.DONE && kind != SessionKind.FAILED) return this
+    val accent = when (kind) {
+        SessionKind.WAITING -> attentionColor()
+        SessionKind.DONE -> successColor()
+        else -> MaterialTheme.colorScheme.error
+    }
+    val duration = when (kind) {
+        SessionKind.WAITING -> 2800
+        SessionKind.DONE -> 5000
+        else -> 4400
+    }
+    val transition = rememberInfiniteTransition(label = "session-glow")
+    val shift by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(duration, easing = androidx.compose.animation.core.LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "session-shift",
+    )
+    val breathe by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 0.75f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(duration / 2, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "session-breathe",
+    )
+    return drawBehind {
+        drawRect(accent.copy(alpha = 0.035f + breathe * 0.035f))
+        val x = (shift * 2.4f - 0.7f) * size.width
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    androidx.compose.ui.graphics.Color.Transparent,
+                    accent.copy(alpha = 0.18f),
+                    androidx.compose.ui.graphics.Color.Transparent,
+                ),
+                start = androidx.compose.ui.geometry.Offset(x - size.width * 0.45f, 0f),
+                end = androidx.compose.ui.geometry.Offset(x + size.width * 0.45f, size.height),
+            ),
+        )
+    }
+}
+
+@Composable
+private fun SessionRow(
+    session: Session,
+    kind: SessionKind,
+    selected: Boolean,
+    draft: Boolean,
+    onClick: () -> Unit,
+) {
+    val running = kind == SessionKind.RUNNING
+    val waiting = kind == SessionKind.WAITING
+    val done = kind == SessionKind.DONE
+    val failed = kind == SessionKind.FAILED
+    val alpha = if (running) {
+        val pulse = rememberInfiniteTransition(label = "running")
+        val value by pulse.animateFloat(
+            initialValue = 0.45f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
+            label = "running-alpha",
+        )
+        value
+    } else {
+        1f
+    }
+    val shape = RoundedCornerShape(9.dp)
+    val dotColor = when {
+        waiting -> attentionColor()
+        failed -> MaterialTheme.colorScheme.error
+        done -> successColor()
+        running -> MaterialTheme.colorScheme.tertiary.copy(alpha = alpha)
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 1.dp)
+            .clip(shape)
+            .background(
+                if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                else androidx.compose.ui.graphics.Color.Transparent,
+            )
+            .sessionGlow(kind)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(if (running || waiting) 7.dp else 4.dp)
+                .clip(CircleShape)
+                .background(dotColor),
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                session.title?.takeIf { it.isNotBlank() } ?: session.id,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val subtitle = when {
+                waiting -> "ждёт ответа"
+                failed -> "ошибка"
+                done -> "готово"
+                running -> "работает"
+                else -> session.agent?.takeIf { it.isNotBlank() }
+            }
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (waiting) attentionColor() else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (draft) {
+            Icon(
+                Icons.Outlined.Edit,
+                contentDescription = "есть черновик",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(12.dp).padding(end = 4.dp),
+            )
+        }
+        Text(
+            shortTime(session.time.updated.takeIf { it > 0 } ?: session.time.created),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+        )
     }
 }
 
@@ -315,107 +456,19 @@ private fun GroupHeader(
             .padding(start = 18.dp, end = 18.dp, top = 12.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(12.dp))
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (accent) attentionColor() else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(12.dp),
+        )
         Spacer(Modifier.width(5.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("  $count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-    }
-}
-
-@Composable
-private fun SessionRow(
-    session: Session,
-    running: Boolean,
-    selected: Boolean,
-    draft: Boolean,
-    waiting: Boolean,
-    onClick: () -> Unit,
-    accent: Boolean = false,
-    failed: Boolean = false,
-) {
-    val alpha = if (running) {
-        val pulse = rememberInfiniteTransition(label = "running")
-        val value by pulse.animateFloat(
-            initialValue = 0.45f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(tween(900), RepeatMode.Reverse),
-            label = "running-alpha",
-        )
-        value
-    } else {
-        1f
-    }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .background(
-                when {
-                    selected -> Brush.horizontalGradient(
-                        listOf(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f), MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
-                    )
-                    accent -> Brush.horizontalGradient(
-                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.07f), androidx.compose.ui.graphics.Color.Transparent),
-                    )
-                    else -> Brush.horizontalGradient(
-                        listOf(MaterialTheme.colorScheme.surface, MaterialTheme.colorScheme.surface),
-                    )
-                },
-            )
-            .padding(horizontal = 18.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier
-                .size(if (running) 7.dp else 4.dp)
-                .clip(CircleShape)
-                .background(
-                    when {
-                        running -> MaterialTheme.colorScheme.tertiary.copy(alpha = alpha)
-                        failed -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.outlineVariant
-                    },
-                ),
-        )
-        if (waiting) {
-            Spacer(Modifier.width(3.dp))
-            Box(
-                Modifier
-                    .size(5.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
-            )
-        }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                session.title?.takeIf { it.isNotBlank() } ?: session.id,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            val subtitle = session.agent?.takeIf { it.isNotBlank() }
-            if (subtitle != null) {
-                Text(
-                    subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        if (draft) {
-            Icon(
-                Icons.Outlined.Edit,
-                contentDescription = "есть черновик",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(12.dp).padding(end = 4.dp),
-            )
-        }
         Text(
-            shortTime(session.time.updated.takeIf { it > 0 } ?: session.time.created),
+            label,
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+            color = if (accent) attentionColor() else MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        Text("  $count", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
     }
 }
 

@@ -66,14 +66,14 @@
 </head>
 <body>
 <h1>Связь с сервером: Android приводим к web</h1>
-<p class="lead">Один и тот же Go-прокси, но у приложения была своя жизнь: разовая проверка здоровья, тихий обрыв SSE, пустые чаты при создании, замена транскрипта вместо склейки. Ниже — карта расхождений и что уже совпадает.</p>
+<p class="lead">Один и тот же Go-прокси, но у приложения была своя жизнь: разовая проверка здоровья, тихий обрыв SSE, пустые чаты при создании, замена транскрипта вместо склейки. Теперь есть холодный кэш только отображаемого, ленивые шаги и живой таймер хода.</p>
 
 <div class="stats">
-  <div class="stat"><b>24</b><span>расхождения закрыты</span></div>
-  <div class="stat"><b>7</b><span>остались сознательно</span></div>
-  <div class="stat"><b>3</b><span>совпадали и раньше</span></div>
+  <div class="stat"><b>33</b><span>расхождения закрыты</span></div>
+  <div class="stat"><b>3</b><span>остались сознательно</span></div>
+  <div class="stat"><b>2</b><span>совпадали и раньше</span></div>
 </div>
-<div class="bar"><i class="fixed" style="width:71%"></i><i class="open" style="width:20%"></i></div>
+<div class="bar"><i class="fixed" style="width:87%"></i><i class="open" style="width:8%"></i></div>
 <div class="legend"><span class="f">сделано</span><span class="o">осталось</span><span>совпадает</span></div>
 
 <h2>Четыре пути, где поведение расходилось</h2>
@@ -114,6 +114,14 @@
     <div class="arrow">↓</div>
     <div class="step new">старые страницы: дедуп и защита от устаревшего ответа</div>
   </div>
+  <div class="flow">
+    <h3>Ход агента</h3>
+    <div class="step old">точка «работает» без деталей</div>
+    <div class="arrow">↓ стало</div>
+    <div class="step new">спиннер · таймер · счётчик шагов · текущее действие</div>
+    <div class="arrow">↓</div>
+    <div class="step new">«Шаги · 12» → полное сообщение по клику, в кэш не пишется</div>
+  </div>
 </div>
 
 <h2>Карта расхождений</h2>
@@ -125,7 +133,7 @@
     <tr><td class="num">2</td><td>старт без сети</td><td>логин «сессия истекла»</td><td>offline-режим, логин только по 401</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">3</td><td>офлайн-баннер</td><td>не было</td><td>баннер + повтор</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">4</td><td>возврат сети</td><td>ничего</td><td>каталог, сессии, выбранный чат</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
-    <tr><td class="num">5</td><td>холодный старт</td><td>скелетон</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">5</td><td>холодный старт</td><td>скелетон</td><td>кэш сессий и транскриптов сразу</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">6</td><td>инстансы</td><td>один сервер</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
     <tr><td class="num">7</td><td>статус канала</td><td>boolean</td><td>connecting / online / offline</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">8</td><td>backoff</td><td>1–30 с без джиттера</td><td>0.5–8 с, джиттер 0.7–1.3</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
@@ -147,12 +155,16 @@
     <tr><td class="num">28</td><td>хвост</td><td>80 сообщений</td><td>50, как web</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">29</td><td>перезагрузка</td><td>замена списка</td><td>склейка с дельтами</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">30</td><td>старые страницы</td><td>дубли и гонки</td><td>дедуп + токен</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
-    <tr><td class="num">31</td><td>предзагрузка</td><td>нет</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
-    <tr><td class="num">32</td><td>tool-детали</td><td>не рендерятся</td><td>не применимо</td><td class="state"><span class="tag same">совпадает</span></td></tr>
-    <tr><td class="num">33</td><td>кэш чата</td><td>скелетон</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">31</td><td>предзагрузка</td><td>нет</td><td>12 свежих видимых чатов</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">32</td><td>tool-детали</td><td>не рендерятся</td><td>ленивая догрузка по клику</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">33</td><td>кэш чата</td><td>скелетон</td><td>мгновенно из кэша</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">34</td><td>формы после обрыва</td><td>не грузились</td><td>грузятся в догоне</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">35</td><td>фоновые формы</td><td>только событие</td><td>опрос каждые 5 с</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
-    <tr><td class="num">36</td><td>возврат из фона</td><td>ждал тика</td><td>—</td><td class="state"><span class="tag open">осталось</span></td></tr>
+    <tr><td class="num">36</td><td>возврат из фона</td><td>ждал тика</td><td>опрос сразу через ProcessLifecycle</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">38</td><td>шаги в ленте</td><td>не видны</td><td>строка «шаги · N», раскрытие грузит полное сообщение</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">39</td><td>live-отдача</td><td>точка «работает»</td><td>спиннер, таймер, счётчик, текущее действие</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">40</td><td>состав кэша</td><td>—</td><td>только текст, вопросы, ошибки; шаги вырезаны</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
+    <tr><td class="num">41</td><td>пустой чат</td><td>оставался при сбое</td><td>pendingCreate + удаление на старте</td><td class="state"><span class="tag fixed">сделано</span></td></tr>
     <tr><td class="num">25</td><td>пагинация списка</td><td>100/страница</td><td>так же</td><td class="state"><span class="tag same">совпадает</span></td></tr>
     <tr><td class="num">37</td><td>уведомления</td><td>локальные из SSE</td><td>платформа разная</td><td class="state"><span class="tag same">совпадает</span></td></tr>
   </tbody>

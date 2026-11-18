@@ -10,7 +10,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,10 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,7 +34,6 @@ import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -50,11 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,7 +55,7 @@ import coil.compose.AsyncImage
 import space.bongdo.nit.data.UserFile
 
 @Composable
-fun Composer(
+fun ComposerBody(
     value: String,
     onValueChange: (String) -> Unit,
     directory: String,
@@ -75,7 +68,6 @@ fun Composer(
     onSend: (String, String?, (Boolean) -> Unit) -> Unit,
     onStop: () -> Unit,
     onCommand: (String) -> Unit,
-    onOpenChats: () -> Unit,
     focusRequest: Int = 0,
 ) {
     var attachOpen by rememberSaveable { mutableStateOf(false) }
@@ -108,218 +100,175 @@ fun Composer(
     }
     val paletteOpen = matches.isNotEmpty() && !commandDismissed
 
-    Surface(
-        color = MaterialTheme.colorScheme.background,
-        tonalElevation = 0.dp,
-        modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding(),
-    ) {
-        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-            var dragTotal by remember { mutableStateOf(0f) }
-            var dragLift by remember { mutableStateOf(0f) }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(16.dp)
-                    .graphicsLayer { translationY = dragLift }
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures(
-                            onDragStart = { dragTotal = 0f },
-                            onVerticalDrag = { change, amount ->
-                                dragTotal += amount
-                                dragLift = (dragLift + amount).coerceIn(-64f, 0f)
-                                change.consume()
-                            },
-                            onDragEnd = {
-                                dragLift = 0f
-                                if (dragTotal < -32f) onOpenChats()
-                                dragTotal = 0f
-                            },
-                            onDragCancel = {
-                                dragLift = 0f
-                                dragTotal = 0f
-                            },
-                        )
-                    }
-                    .clickableNoRipple { onOpenChats() },
-                contentAlignment = Alignment.Center,
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp)) {
+        if (running) {
+            Row(
+                Modifier.padding(start = 4.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(
-                    Modifier
-                        .width(40.dp)
-                        .height(3.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+                listOf("steer" to "В текущий ход", "queue" to "В очередь").forEach { (id, label) ->
+                    val active = delivery == id
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(7.dp))
+                            .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                            .clickableNoRipple { delivery = id }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+                Text(
+                    "агент сейчас работает",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             }
-            if (running) {
-                Row(
-                    Modifier.padding(start = 4.dp, bottom = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    listOf("steer" to "В текущий ход", "queue" to "В очередь").forEach { (id, label) ->
-                        val active = delivery == id
+        }
+        AnimatedVisibility(
+            visible = paletteOpen,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            SlashPalette(
+                commands = matches,
+                onPick = { command ->
+                    onValueChange("")
+                    commandDismissed = true
+                    onCommand(command.id)
+                },
+            )
+        }
+        if (attachments.isNotEmpty()) {
+            Row(
+                modifier = Modifier.padding(bottom = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                attachments.forEach { item ->
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .padding(start = 7.dp, top = 5.dp, bottom = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        val model = imageModel(item)
+                        if (model != null) {
+                            AsyncImage(
+                                model = model,
+                                contentDescription = item.name,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(RoundedCornerShape(5.dp)),
+                            )
+                        } else {
+                            Icon(
+                                fileIconFor(item.name),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(5.dp))
                         Text(
-                            label,
+                            item.name ?: "файл",
                             style = MaterialTheme.typography.labelSmall,
-                            color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.width(120.dp),
+                        )
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "убрать",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
-                                .clickableNoRipple { delivery = id }
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                                .padding(horizontal = 4.dp)
+                                .size(13.dp)
+                                .clickableNoRipple { onRemove(item) },
                         )
                     }
+                }
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            IconButton(onClick = { attachOpen = true }, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Outlined.AttachFile,
+                    contentDescription = "прикрепить",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Box(Modifier.weight(1f).padding(vertical = 11.dp, horizontal = 2.dp)) {
+                BasicTextField(
+                    value = value,
+                    onValueChange = {
+                        onValueChange(it)
+                        commandDismissed = false
+                    },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
+                    keyboardActions = KeyboardActions(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 20.dp, max = 150.dp)
+                        .focusRequester(focusRequester),
+                )
+                if (value.isEmpty()) {
                     Text(
-                        "агент сейчас работает",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        if (directory.isBlank()) "Выберите папку в меню…" else "Спроси что угодно… / команды",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     )
                 }
             }
-            AnimatedVisibility(
-                visible = paletteOpen,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                SlashPalette(
-                    commands = matches,
-                    onPick = { command ->
-                        onValueChange("")
-                        commandDismissed = true
-                        onCommand(command.id)
-                    },
-                )
-            }
-            if (attachments.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.padding(bottom = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    attachments.forEach { item ->
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(start = 7.dp, top = 5.dp, bottom = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            val model = imageModel(item)
-                            if (model != null) {
-                                AsyncImage(
-                                    model = model,
-                                    contentDescription = item.name,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(RoundedCornerShape(5.dp)),
-                                )
-                            } else {
-                                Icon(
-                                    fileIconFor(item.name),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp),
-                                )
-                            }
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                item.name ?: "файл",
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.width(120.dp),
-                            )
-                            Icon(
-                                Icons.Outlined.Close,
-                                contentDescription = "убрать",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .padding(horizontal = 4.dp)
-                                    .size(13.dp)
-                                    .clickableNoRipple { onRemove(item) },
-                            )
-                        }
-                    }
-                }
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surface),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                IconButton(onClick = { attachOpen = true }, modifier = Modifier.size(44.dp)) {
+            if (running) {
+                IconButton(onClick = onStop, modifier = Modifier.size(40.dp)) {
                     Icon(
-                        Icons.Outlined.AttachFile,
-                        contentDescription = "прикрепить",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Icons.Outlined.Stop,
+                        contentDescription = "остановить",
+                        tint = MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(20.dp),
                     )
                 }
-                Box(Modifier.weight(1f).padding(vertical = 11.dp, horizontal = 2.dp)) {
-                    BasicTextField(
-                        value = value,
-                        onValueChange = {
-                            onValueChange(it)
-                            commandDismissed = false
-                        },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        maxLines = 6,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-                        keyboardActions = KeyboardActions(),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 20.dp, max = 150.dp)
-                            .focusRequester(focusRequester),
-                    )
-                    if (value.isEmpty()) {
-                        Text(
-                            if (directory.isBlank()) "Выберите папку в меню…" else "Спроси что угодно… / команды",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        )
-                    }
-                }
-                if (running) {
-                    IconButton(onClick = onStop, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            Icons.Outlined.Stop,
-                            contentDescription = "остановить",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = {
-                        if (!canSend) return@IconButton
-                        onSend(value, if (running) delivery else null) { _ -> }
-                    },
-                    enabled = canSend,
-                    modifier = Modifier.padding(end = 5.dp, bottom = 5.dp).size(34.dp),
+            }
+            IconButton(
+                onClick = {
+                    if (!canSend) return@IconButton
+                    onSend(value, if (running) delivery else null) { _ -> }
+                },
+                enabled = canSend,
+                modifier = Modifier.padding(end = 5.dp, bottom = 5.dp).size(34.dp),
+            ) {
+                Box(
+                    Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (canSend) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                        ),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    Box(
-                        Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (canSend) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceVariant,
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            Icons.Outlined.ArrowUpward,
-                            contentDescription = "отправить",
-                            tint = if (canSend) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                    Icon(
+                        Icons.Outlined.ArrowUpward,
+                        contentDescription = "отправить",
+                        tint = if (canSend) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
                 }
             }
         }

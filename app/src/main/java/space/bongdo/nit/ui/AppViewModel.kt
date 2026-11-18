@@ -5,6 +5,9 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import coil.request.ImageRequest
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
@@ -28,6 +31,9 @@ import kotlinx.serialization.json.doubleOrNull
 import space.bongdo.nit.data.Agent
 import space.bongdo.nit.data.ApiException
 import space.bongdo.nit.data.AppSettings
+import space.bongdo.nit.data.CachedBoot
+import space.bongdo.nit.data.CachedChat
+import space.bongdo.nit.data.ChatCache
 import space.bongdo.nit.data.DraftStore
 import space.bongdo.nit.data.EventStream
 import space.bongdo.nit.data.FolderListing
@@ -104,6 +110,8 @@ data class UiState(
     val attachments: List<UserFile> = emptyList(),
     val preferredModel: ModelRef? = null,
     val preferredAgent: String? = null,
+    val details: Map<String, Message> = emptyMap(),
+    val loadingSteps: Boolean = false,
 )
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -131,8 +139,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val runningEventsAt = mutableMapOf<String, Long>()
     private val retryAttempts = mutableMapOf<String, Int>()
     private val retryJobs = mutableMapOf<String, Job>()
+    private val chatCache = ChatCache(application)
+    private val transcripts = mutableMapOf<String, CachedChat>()
+    private var cachedSessions = emptyList<Session>()
+    private var cacheJob: Job? = null
+    private var prefetchJob: Job? = null
+
+    private val lifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            if (_state.value.phase != Phase.Ready) return
+            if (_state.value.healthOk) viewModelScope.launch { pollWaiting() }
+            else retryConnection()
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            cacheJob?.cancel()
+            viewModelScope.launch { writeCache() }
+        }
+    }
 
     init {
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         viewModelScope.launch {
             runCatching {
                 val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
@@ -157,6 +184,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(phase = Phase.Login) }
                 return@launch
             }
+            val cached = chatCache.read(currentServer!!.display)
+            if (cached != null) {
+                transcripts.putAll(cached.chats)
+                cachedSessions = cached.sessions
+                val id = cached.lastSession.ifBlank { settings.lastSession }
+                val session = cached.sessions.firstOrNull { it.id == id }
+                val chat = cached.chats[id]
+                if (session != null) {
+                    _state.update {
+                        it.copy(
+                            phase = Phase.Ready,
+                            sessions = cached.sessions,
+                            selected = session,
+                            messages = chat?.messages.orEmpty(),
+                            previous = chat?.previous,
+                            loadingMessages = false,
+                            settings = it.settings.copy(lastSession = id),
+                        )
+                    }
+                }
+            }
             val online = try {
                 api.health()
                 true
@@ -168,6 +216,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             enterApp(initialHealthOk = online)
         }
+    }
+
+    override fun onCleared() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
+        super.onCleared()
     }
 
     fun dismissBanner() = _state.update { it.copy(banner = null) }
@@ -242,6 +295,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(busy = true, loginError = null) }
             try {
                 val parsed = parseServer(server) ?: throw ApiException("проверьте адрес сервера")
+                if (parsed.display != currentServer?.display) {
+                    transcripts.clear()
+                    cachedSessions = emptyList()
+                }
                 currentServer = parsed
                 api.useServer(parsed)
                 settingsStore.update { it.copy(server = parsed.display) }
@@ -261,7 +318,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun logout() {
         stopLoops()
+        transcripts.clear()
+        cachedSessions = emptyList()
         viewModelScope.launch {
+            chatCache.clear()
+            settingsStore.update { it.copy(pendingCreate = "") }
             runCatching { api.logout() }
             secureStore.cookies.clear()
             draftJob?.cancel()
@@ -276,6 +337,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         healthJob = null
         watchJob?.cancel()
         watchJob = null
+        cacheJob?.cancel()
+        cacheJob = null
+        prefetchJob?.cancel()
+        prefetchJob = null
         retryJobs.values.forEach { it.cancel() }
         retryJobs.clear()
         retryAttempts.clear()
@@ -299,6 +364,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         startWatch()
         viewModelScope.launch { loadUiState() }
         refreshSessions()
+        if (initialHealthOk) viewModelScope.launch { cleanupPendingCreate() }
         val pending = pendingSession
         if (pending != null) {
             pendingSession = null
@@ -313,12 +379,168 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun pollWaiting() {
+        val sessions = _state.value.sessions
+        if (sessions.isEmpty()) return
+        val candidates = sessions.filter { session ->
+            session.id != _state.value.selected?.id &&
+                ((session.time.busy ?: 0) > (session.time.idle ?: 0) ||
+                    session.id in _state.value.runningIds)
+        }.take(20)
+        for (session in candidates) {
+            val waiting = runCatching {
+                api.permissions(session.id).isNotEmpty() || api.forms(session.id).isNotEmpty()
+            }.getOrDefault(false)
+            _state.update {
+                it.copy(waitingIds = if (waiting) it.waitingIds + session.id else it.waitingIds - session.id)
+            }
+            if (waiting) notifyWaiting(session.id)
+        }
+    }
+
+    private suspend fun writeCache() {
+        val server = currentServer?.display ?: return
+        val sessions = cachedSessions.ifEmpty { _state.value.sessions }
+        if (sessions.isEmpty()) return
+        chatCache.write(
+            CachedBoot(
+                server = server,
+                sessions = sessions,
+                chats = transcripts.toMap(),
+                lastSession = _state.value.selected?.id ?: _state.value.settings.lastSession,
+                savedAt = System.currentTimeMillis(),
+            ),
+        )
+    }
+
+    private fun sessionUpdatedAt(id: String?): Long =
+        _state.value.sessions.firstOrNull { it.id == id }?.time?.updated
+            ?: _state.value.selected?.takeIf { it.id == id }?.time?.updated
+            ?: 0
+
+    private fun rememberTranscript(
+        id: String?,
+        messages: List<Message>,
+        previous: String?,
+        updatedAt: Long = sessionUpdatedAt(id),
+    ) {
+        if (id.isNullOrBlank() || messages.isEmpty()) return
+        transcripts[id] = CachedChat(ChatCache.lighten(messages), previous, updatedAt)
+        scheduleCacheWrite()
+    }
+
+    private fun scheduleCacheWrite() {
+        if (cacheJob?.isActive == true) return
+        cacheJob = viewModelScope.launch {
+            delay(1_200)
+            writeCache()
+        }
+    }
+
+    private fun prefetchTranscripts(sessions: List<Session>) {
+        if (prefetchJob?.isActive == true || !_state.value.healthOk) return
+        prefetchJob = viewModelScope.launch {
+            delay(800)
+            val selected = _state.value.selected?.id
+            val queue = sessions
+                .asSequence()
+                .filter { it.id != selected }
+                .filter { !it.running() }
+                .sortedByDescending { it.time.updated }
+                .filter { transcripts[it.id]?.updatedAt != it.time.updated }
+                .take(PREFETCH_LIMIT)
+                .toList()
+            for (session in queue) {
+                if (!_state.value.healthOk || _state.value.selected?.id == session.id) continue
+                runCatching { api.messages(session.id, limit = TAIL_LIMIT) }
+                    .onSuccess { page ->
+                        if (page.data.isEmpty()) return@onSuccess
+                        rememberTranscript(session.id, page.data, page.previous, session.time.updated)
+                    }
+            }
+        }
+    }
+
+    private suspend fun cleanupPendingCreate() {
+        val id = settingsStore.flow.first().pendingCreate
+        if (id.isBlank()) return
+        var deleted = false
+        val outcome = runCatching {
+            val session = api.session(id)
+            if (!session.running() && api.messages(id, limit = 1).data.isEmpty()) {
+                api.deleteSession(id)
+                deleted = true
+            }
+        }
+        val status = (outcome.exceptionOrNull() as? ApiException)?.status ?: 0
+        if (outcome.isSuccess || status == 404) {
+            settingsStore.update { settings ->
+                settings.copy(
+                    pendingCreate = "",
+                    lastSession = if (deleted && settings.lastSession == id) "" else settings.lastSession,
+                )
+            }
+            if (deleted) {
+                transcripts.remove(id)
+                if (firstPrompt?.first == id) firstPrompt = null
+                _state.update { state ->
+                    if (state.selected?.id != id) return@update state
+                    state.copy(
+                        selected = null,
+                        messages = emptyList(),
+                        previous = null,
+                        permissions = emptyList(),
+                        forms = emptyList(),
+                        children = emptyList(),
+                        running = false,
+                        runningIds = state.runningIds - id,
+                        waitingIds = state.waitingIds - id,
+                        status = state.status - id,
+                        loadingMessages = false,
+                        details = emptyMap(),
+                        loadingSteps = false,
+                    )
+                }
+            }
+            refreshSessions()
+        }
+    }
+
+    fun loadSteps(ids: List<String>) {
+        val session = _state.value.selected?.id ?: return
+        if (_state.value.loadingSteps) return
+        val known = _state.value.messages
+        val needed = ids.distinct().filter { id ->
+            id !in _state.value.details &&
+                !id.startsWith("local-") &&
+                (known.firstOrNull { it.id == id }?.steps ?: 0) > 0
+        }
+        if (needed.isEmpty()) return
+        _state.update { it.copy(loadingSteps = true) }
+        viewModelScope.launch {
+            val loaded = coroutineScope {
+                needed.map { id ->
+                    async { id to runCatching { api.message(session, id) }.getOrNull() }
+                }.awaitAll()
+            }
+            if (_state.value.selected?.id != session) return@launch
+            val found = loaded.mapNotNull { (id, message) -> message?.let { id to it } }.toMap()
+            _state.update {
+                it.copy(
+                    details = it.details + found,
+                    loadingSteps = false,
+                    banner = if (found.size < needed.size && it.healthOk) "не все шаги загрузились" else it.banner,
+                )
+            }
+        }
+    }
+
     private suspend fun loadUiState() {
         val ui = runCatching { api.uiState() }.getOrNull() ?: return
         _state.update {
             it.copy(
                 hidden = ui.hidden.toSet(),
-                status = ui.status,
+                status = (ui.status + it.status).filterKeys { id -> id !in it.runningIds },
                 preferredModel = ui.model ?: it.preferredModel,
                 preferredAgent = ui.agent ?: it.preferredAgent,
             )
@@ -383,6 +605,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun catchUp() {
         _state.update { it.copy(banner = null) }
         refreshSessions()
+        viewModelScope.launch { cleanupPendingCreate() }
         val id = _state.value.selected?.id ?: return
         viewModelScope.launch {
             reloadMessages(id)
@@ -476,8 +699,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         runningIds = it.runningIds + sessionID,
                         status = it.status - sessionID,
+                        details = if (sessionID == it.selected?.id) emptyMap() else it.details,
+                        loadingSteps = if (sessionID == it.selected?.id) false else it.loadingSteps,
                     )
                 }
+                viewModelScope.launch { runCatching { api.setSessionStatus(sessionID, "") } }
             }
             "session.compaction.started" -> {
                 if (sessionID == _state.value.selected?.id) _state.update { it.copy(compacting = true) }
@@ -520,6 +746,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             "session.execution.failed",
             "session.execution.interrupted",
             -> {
+                var posted: String? = null
                 _state.update {
                     val status = when {
                         event.type == "session.execution.failed" -> "failed"
@@ -527,12 +754,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         it.status[sessionID] == "failed" -> "failed"
                         else -> "done"
                     }
+                    posted = status
                     it.copy(
                         runningIds = it.runningIds - sessionID,
                         status = if (status == null) it.status else it.status + (sessionID to status),
                         compacting = it.compacting && sessionID != it.selected?.id,
+                        details = if (sessionID == it.selected?.id) emptyMap() else it.details,
+                        loadingSteps = if (sessionID == it.selected?.id) false else it.loadingSteps,
                     )
                 }
+                posted?.let { value -> viewModelScope.launch { runCatching { api.setSessionStatus(sessionID, value) } } }
                 notifiedWaiting.remove(sessionID)
                 notifyDone(sessionID)
                 if (sessionID == _state.value.selected?.id) {
@@ -569,6 +800,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     runningIds = it.runningIds - sessionID,
                     waitingIds = it.waitingIds - sessionID,
                     status = it.status - sessionID,
+                    details = emptyMap(),
+                    loadingSteps = false,
                 )
             }
         }
@@ -665,6 +898,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         val selected = current.selected?.let { item ->
                             sessions.firstOrNull { it.id == item.id } ?: item
                         }
+                        if (search.isBlank()) cachedSessions = sessions
                         current.copy(
                             sessions = sessions,
                             selected = selected,
@@ -677,6 +911,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }
+                    scheduleCacheWrite()
+                    prefetchTranscripts(sessions)
                 }
                 .onFailure { error ->
                     if (error is UnauthorizedException) {
@@ -699,26 +935,50 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openSession(id: String) {
-        viewModelScope.launch {
-            val session = runCatching { api.session(id) }.getOrElse { error ->
-                _state.update { it.copy(banner = error.message) }
-                _state.value.sessions.firstOrNull { it.id == id }
-            } ?: return@launch
-            _state.update {
-                it.copy(
+        val current = _state.value
+        rememberTranscript(current.selected?.id, current.messages, current.previous)
+        val cached = transcripts[id]
+        val known = current.sessions.firstOrNull { it.id == id }
+            ?: cachedSessions.firstOrNull { it.id == id }
+
+        suspend fun select(session: Session) {
+            _state.update { state ->
+                val same = state.selected?.id == id
+                state.copy(
                     selected = session,
-                    messages = emptyList(),
-                    previous = null,
+                    messages = cached?.messages ?: if (same) state.messages else emptyList(),
+                    previous = if (cached != null) cached.previous else if (same) state.previous else null,
                     children = emptyList(),
                     compacting = false,
-                    loadingMessages = true,
+                    loadingMessages = cached == null && !same,
+                    details = emptyMap(),
+                    loadingSteps = false,
                 )
             }
-            switchDraft(id)
             val directory = session.location.directory.ifBlank { _state.value.settings.lastDirectory }
-            settingsStore.update { it.copy(lastSession = id, lastDirectory = directory) }
             _state.update { it.copy(settings = it.settings.copy(lastSession = id, lastDirectory = directory)) }
-            reloadMessages(id)
+            switchDraft(id)
+        }
+
+        viewModelScope.launch {
+            if (known != null) select(known)
+            settingsStore.update { it.copy(lastSession = id) }
+            val session = runCatching { api.session(id) }.getOrElse { error ->
+                if (error !is UnauthorizedException && _state.value.healthOk) {
+                    _state.update { it.copy(banner = error.message) }
+                }
+                _state.value.sessions.firstOrNull { it.id == id }
+                    ?: cachedSessions.firstOrNull { it.id == id }
+            } ?: return@launch
+            select(session)
+            settingsStore.update {
+                it.copy(
+                    lastSession = id,
+                    lastDirectory = session.location.directory.ifBlank { it.lastDirectory },
+                )
+            }
+            val fresh = cached == null || cached.updatedAt != session.time.updated || session.running()
+            if (fresh) reloadMessages(id) else _state.update { it.copy(loadingMessages = false) }
             loadPermissionsAndForms(id)
             launch { runCatching { api.children(id) }.onSuccess { children -> _state.update { it.copy(children = children) } } }
             launch { runCatching { api.models(session.location.directory) }.onSuccess { models -> _state.update { it.copy(models = models) } } }
@@ -740,6 +1000,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         loadingMessages = false,
                     )
                 }
+                rememberTranscript(id, _state.value.messages, page.previous)
             }
             .onFailure { error ->
                 if (token != messagesToken) return@onFailure
@@ -815,6 +1076,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         model = _state.value.preferredModel,
                     )
                     created = true
+                    settingsStore.update { it.copy(pendingCreate = session.id) }
                     _state.update {
                         it.copy(
                             selected = session,
@@ -838,11 +1100,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         messages = it.messages + optimistic,
                         running = true,
                         runningIds = it.runningIds + session.id,
+                        details = emptyMap(),
+                        loadingSteps = false,
                     )
                 }
                 runningEventsAt[session.id] = System.currentTimeMillis()
                 val admitted = api.prompt(session.id, body, attachments, delivery)
-                if (created) firstPrompt = session.id to body
+                if (created) {
+                    firstPrompt = session.id to body
+                    settingsStore.update { it.copy(pendingCreate = "") }
+                }
                 if (!admitted.isNullOrBlank()) {
                     _state.update { current ->
                         current.copy(messages = current.messages.map { if (it.id == localID) it.copy(id = admitted) else it })
@@ -882,6 +1149,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             banner = error.message,
                         )
                     }
+                    if (created && sid != null) cleanupPendingCreate()
                 }
                 onResult(false)
             }
@@ -904,6 +1172,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val mine = _state.value.messages.count { it.type == "user" }
             if (answered || mine > 1) return@launch
             runCatching { api.deleteSession(id) }
+            transcripts.remove(id)
+            settingsStore.update { it.copy(pendingCreate = "") }
             val directory = _state.value.settings.lastDirectory
             val key = "new:$directory"
             draftJob?.cancel()
@@ -912,16 +1182,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { api.setDraft(key, first.second) }
             settingsStore.update { it.copy(lastSession = "") }
             _state.update {
-                it.copy(
-                    selected = null,
-                    messages = emptyList(),
-                    previous = null,
-                    permissions = emptyList(),
-                    forms = emptyList(),
-                    children = emptyList(),
-                    compacting = false,
-                    loadingMessages = false,
-                    runningIds = it.runningIds - id,
+            it.copy(
+                selected = null,
+                messages = emptyList(),
+                previous = null,
+                permissions = emptyList(),
+                forms = emptyList(),
+                children = emptyList(),
+                compacting = false,
+                loadingMessages = false,
+                details = emptyMap(),
+                loadingSteps = false,
+                runningIds = it.runningIds - id,
                     waitingIds = it.waitingIds - id,
                     status = it.status - id,
                     sessions = it.sessions.filterNot { session -> session.id == id },
@@ -947,6 +1219,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     compacting = false,
                     loadingMessages = false,
                     busy = false,
+                    details = emptyMap(),
+                    loadingSteps = false,
                 )
             }
             switchDraft("new:$directory")
@@ -968,6 +1242,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     forms = emptyList(),
                     compacting = false,
                     loadingMessages = false,
+                    details = emptyMap(),
+                    loadingSteps = false,
                 )
             }
             switchDraft("new:$directory")
@@ -1315,6 +1591,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val TAIL_LIMIT = 50
+        const val PREFETCH_LIMIT = 12
         val TERMINAL = setOf(
             "session.idle",
             "session.execution.succeeded",

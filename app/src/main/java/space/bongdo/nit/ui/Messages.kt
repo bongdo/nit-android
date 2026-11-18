@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,32 +51,53 @@ import space.bongdo.nit.data.Message
 import space.bongdo.nit.data.Part
 import space.bongdo.nit.data.UserFile
 
-fun displayMessages(messages: List<Message>, running: Boolean): List<Message> {
+fun displayMessages(
+    messages: List<Message>,
+    running: Boolean,
+    details: Map<String, Message> = emptyMap(),
+): List<Message> {
+    val view = if (details.isEmpty()) messages else messages.map { details[it.id] ?: it }
     val out = mutableListOf<Message>()
     var index = 0
-    while (index < messages.size) {
-        val message = messages[index]
+    while (index < view.size) {
+        val message = view[index]
         if (message.type == "assistant") {
             val group = mutableListOf(message)
             var next = index + 1
-            while (next < messages.size && messages[next].type == "assistant") {
-                group += messages[next]
+            while (next < view.size && view[next].type == "assistant") {
+                group += view[next]
                 next += 1
             }
-            val merged = message.copy(
+            val source = messages.subList(index, next)
+            val activity = group.flatMap { it.content.orEmpty() }.filter { isActivity(it) }
+            val markers = source.filter { details[it.id] == null }
+            val markerSteps = markers.sumOf { it.steps ?: 0 }
+            val markerTools = markers.sumOf { it.tools ?: 0 }
+            val markerErrors = markers.sumOf { it.errors ?: 0 }
+            val shownSteps = activity.size + markerSteps
+            val shownTools = activity.count { it.type == "tool" } + markerTools
+            val shownErrors = activity.count { it.type == "tool" && it.state?.status == "error" } + markerErrors
+            val first = group.first()
+            val last = group.last()
+            val end = last.time.completed ?: last.time.streamed ?: last.time.created
+            val merged = first.copy(
                 content = group.flatMap { it.content.orEmpty() },
                 error = group.lastOrNull { it.error != null }?.error,
                 cost = group.sumOf { it.cost ?: 0.0 },
                 tokens = group.lastOrNull { it.tokens != null }?.tokens,
                 agent = group.firstOrNull { !it.agent.isNullOrBlank() }?.agent,
-                time = group.first().time,
+                time = first.time.copy(completed = end),
+                sourceIDs = source.map { it.id },
+                shownSteps = shownSteps,
+                shownTools = shownTools,
+                shownErrors = shownErrors,
             )
             val visible = merged.content.orEmpty().any { part ->
                 (part.type == "text" && part.text.isNotBlank()) ||
                     (part.type == "tool" && part.name == "question" && questionRecords(part).any { it.answers.isNotEmpty() })
-            } || merged.error != null
-            val last = running && next == messages.size
-            if (visible || last) out += merged
+            } || merged.error != null || shownSteps > 0
+            val lastRunning = running && next == view.size
+            if (visible || lastRunning) out += merged
             index = next
         } else if (message.type == "user" || message.type == "compaction" ||
             message.type == "shell" || message.type == "skill" ||
@@ -96,14 +118,26 @@ fun displayMessages(messages: List<Message>, running: Boolean): List<Message> {
 fun MessageItem(
     message: Message,
     running: Boolean,
+    directory: String?,
+    stepsLoading: Boolean,
     imageModel: (UserFile) -> Any?,
+    onLoadSteps: (List<String>) -> Unit,
     onOpenHtml: (String, String) -> Unit,
     onOpenArtifact: (String, String) -> Unit,
     onOpenFile: (String, String) -> Unit,
 ) {
     when (message.type) {
         "user" -> UserMessage(message, imageModel, onOpenHtml, onOpenArtifact, onOpenFile)
-        "assistant" -> AssistantMessage(message, running, onOpenHtml, onOpenArtifact, onOpenFile)
+        "assistant" -> AssistantMessage(
+            message = message,
+            running = running,
+            directory = directory,
+            stepsLoading = stepsLoading,
+            onLoadSteps = onLoadSteps,
+            onOpenHtml = onOpenHtml,
+            onOpenArtifact = onOpenArtifact,
+            onOpenFile = onOpenFile,
+        )
         "compaction" -> CompactionRow(message)
         "shell" -> ShellCard(message)
         "skill" -> NoteLine("Skill ${message.name.orEmpty()}".trim())
@@ -280,6 +314,9 @@ private fun FileRow(file: UserFile, onOpenFile: (String, String) -> Unit) {
 private fun AssistantMessage(
     message: Message,
     running: Boolean,
+    directory: String?,
+    stepsLoading: Boolean,
+    onLoadSteps: (List<String>) -> Unit,
     onOpenHtml: (String, String) -> Unit,
     onOpenArtifact: (String, String) -> Unit,
     onOpenFile: (String, String) -> Unit,
@@ -287,8 +324,19 @@ private fun AssistantMessage(
     val parts = message.content.orEmpty()
     val questions = parts.filter { it.type == "tool" && it.name == "question" }
     val textParts = parts.filter { it.type == "text" && it.text.isNotBlank() }
+    val activity = parts.filter { isActivity(it) }
+    val current = activity.lastOrNull()
+    var stepsOpen by remember(message.id) { mutableStateOf(false) }
     var copied by remember(message.id) { mutableStateOf(false) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
     val clipboard = LocalClipboardManager.current
+
+    LaunchedEffect(running) {
+        while (running) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
 
     fun copy() {
         val full = textParts.joinToString("\n\n") { it.text }
@@ -303,6 +351,29 @@ private fun AssistantMessage(
         }
     }
 
+    val duration = if (message.time.created > 0) {
+        durationLabel(message.time.created, if (running) now else message.time.completed ?: now)
+    } else {
+        ""
+    }
+    val stats = buildList {
+        if (message.shownSteps > 0) add("${message.shownSteps} ${plural(message.shownSteps, "шаг", "шага", "шагов")}")
+        if (message.shownTools > 0) add("${message.shownTools} ${plural(message.shownTools, "вызов", "вызова", "вызовов")}")
+        if (message.shownErrors > 0) add("${message.shownErrors} ${plural(message.shownErrors, "ошибка", "ошибки", "ошибок")}")
+        if (duration.isNotBlank()) add(duration)
+    }.joinToString(" · ")
+    val liveStats = buildList {
+        if (message.shownSteps > 0) add("${message.shownSteps} шагов")
+        if (duration.isNotBlank()) add(duration)
+    }.joinToString(" · ")
+    val summary = when {
+        running && current != null -> activityLine(current, directory)
+        running && textParts.isEmpty() -> "Ждём первый токен…"
+        running -> "Печатает"
+        else -> stats
+    }
+    val showSteps = running || message.shownSteps > 0
+
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("NIT", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
@@ -313,25 +384,56 @@ private fun AssistantMessage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (running && textParts.isNotEmpty()) {
-                Text(
-                    "  работает",
-                    style = MaterialTheme.typography.labelSmall,
+            Spacer(Modifier.weight(1f))
+            if (running) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    strokeWidth = 1.4.dp,
                     color = MaterialTheme.colorScheme.tertiary,
                 )
+                if (duration.isNotBlank()) {
+                    Text(
+                        "  $duration",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            } else {
+                Text(
+                    shortTime(message.time.created),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                )
             }
-            Spacer(Modifier.weight(1f))
-            Text(
-                shortTime(message.time.created),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            )
         }
         Spacer(Modifier.height(5.dp))
 
         val answeredQuestion = questions.any { part -> questionRecords(part).any { it.answers.isNotEmpty() } }
-        if (textParts.isEmpty() && !answeredQuestion && message.error == null && running) {
-            TypingLine()
+        if (showSteps) {
+            StepsRow(
+                summary = summary,
+                liveStats = if (running) liveStats else "",
+                running = running,
+                loading = stepsLoading && activity.isEmpty(),
+                expanded = stepsOpen,
+                hasErrors = message.shownErrors > 0,
+                onToggle = {
+                    stepsOpen = !stepsOpen
+                    if (stepsOpen) onLoadSteps(message.sourceIDs)
+                },
+            )
+            if (stepsOpen) {
+                when {
+                    activity.isNotEmpty() -> ActivityLog(activity, running, directory)
+                    stepsLoading -> StepNote("Загружаю шаги…")
+                    else -> StepNote("Шаги этого хода не сохранены.")
+                }
+            }
+            Spacer(Modifier.height(2.dp))
+        }
+
+        if (textParts.isEmpty() && activity.isEmpty() && !answeredQuestion && message.error == null && running) {
+            Spacer(Modifier.height(4.dp))
         }
 
         SelectionContainer {

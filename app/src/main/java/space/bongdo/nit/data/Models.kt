@@ -171,6 +171,10 @@ data class Message(
     val description: String? = null,
     val summary: String? = null,
     val reason: String? = null,
+    @kotlinx.serialization.Transient val sourceIDs: List<String> = emptyList(),
+    @kotlinx.serialization.Transient val shownSteps: Int = 0,
+    @kotlinx.serialization.Transient val shownTools: Int = 0,
+    @kotlinx.serialization.Transient val shownErrors: Int = 0,
 )
 
 @Serializable

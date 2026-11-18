@@ -3,14 +3,17 @@ package space.bongdo.nit.ui
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,6 +25,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -43,9 +49,12 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -53,13 +62,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import space.bongdo.nit.data.Message
@@ -68,16 +82,20 @@ import java.io.File
 
 @Composable
 fun ChatScreen(state: UiState, viewModel: AppViewModel) {
-    var sessionsOpen by rememberSaveable { mutableStateOf(false) }
     var settingsOpen by rememberSaveable { mutableStateOf(false) }
     var pickerOpen by rememberSaveable { mutableStateOf(false) }
     var pickerCreates by rememberSaveable { mutableStateOf(true) }
     var themeOpen by rememberSaveable { mutableStateOf(false) }
     var topMenuOpen by rememberSaveable { mutableStateOf(false) }
+    var sessionsQuery by rememberSaveable { mutableStateOf("") }
+    var dockProgress by remember { mutableFloatStateOf(0f) }
+    var dockJob by remember { mutableStateOf<Job?>(null) }
     val listState = rememberLazyListState()
+    val sessionsListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
     val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     var focusRequest by remember { mutableStateOf(0) }
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
     LaunchedEffect(Unit) {
@@ -96,7 +114,9 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
     }
     val directory = state.selected?.location?.directory?.takeIf { it.isNotBlank() }
         ?: state.settings.lastDirectory
-    val display = remember(state.messages, state.running) { displayMessages(state.messages, state.running) }
+    val display = remember(state.messages, state.running, state.details) {
+        displayMessages(state.messages, state.running, state.details)
+    }
     val questionForm = state.forms.firstOrNull { it.isQuestionForm() }
     val otherForms = state.forms.filterNot { it.isQuestionForm() }
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
@@ -111,6 +131,49 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
             pickerOpen = true
             viewModel.loadProjects()
         }
+    }
+
+    fun animateDock(target: Float) {
+        dockJob?.cancel()
+        dockJob = scope.launch {
+            animate(
+                initialValue = dockProgress,
+                targetValue = target,
+                animationSpec = tween(320, easing = FastOutSlowInEasing),
+            ) { value, _ -> dockProgress = value }
+            if (target == 0f) {
+                keyboard?.hide()
+                focusManager.clearFocus()
+                if (stick) {
+                    val total = listState.layoutInfo.totalItemsCount
+                    if (total > 0) listState.scrollToItem(total - 1, Int.MAX_VALUE)
+                }
+            }
+        }
+    }
+
+    fun openDock() {
+        keyboard?.hide()
+        focusManager.clearFocus()
+        viewModel.refreshSessions(sessionsQuery)
+        viewModel.loadProjects()
+        animateDock(1f)
+    }
+
+    fun closeDock() {
+        animateDock(0f)
+    }
+
+    BackHandler(enabled = dockProgress > 0.5f) { closeDock() }
+
+    LaunchedEffect(sessionsQuery) {
+        if (sessionsListState.layoutInfo.totalItemsCount > 0) sessionsListState.scrollToItem(0)
+        if (sessionsQuery.isBlank()) {
+            viewModel.refreshSessions("")
+            return@LaunchedEffect
+        }
+        if (sessionsQuery.length >= 2) delay(350)
+        viewModel.refreshSessions(sessionsQuery)
     }
 
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -199,7 +262,12 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val ime = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+        val available = (maxHeight - ime).coerceAtLeast(0.dp)
+        val expandedHeight = available * 0.78f
+
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 if (display.isEmpty()) {
@@ -231,7 +299,10 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                             MessageItem(
                                 message = message,
                                 running = state.running && message.id == lastAssistant,
+                                directory = directory,
+                                stepsLoading = state.loadingSteps,
                                 imageModel = viewModel::imageModel,
+                                onLoadSteps = viewModel::loadSteps,
                                 onOpenHtml = { source, title -> viewModel.openHtml(source, title) },
                                 onOpenArtifact = { path, title -> viewModel.openArtifact(path, title) },
                                 onOpenFile = { path, title -> viewModel.openFile(path, title) },
@@ -244,7 +315,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                             item("compacting") { CompactionBusyLine() }
                         }
                     }
-                    if (!atBottom && display.isNotEmpty()) {
+                    if (!atBottom && display.isNotEmpty() && dockProgress < 0.1f) {
                         FloatingActionButton(
                             onClick = {
                                 stick = true
@@ -265,6 +336,14 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                         }
                     }
                 }
+                if (dockProgress > 0.01f) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = dockProgress * 0.3f))
+                            .clickable { closeDock() },
+                    )
+                }
                 if (otherForms.isNotEmpty()) {
                     FormSheet(
                         forms = otherForms,
@@ -274,60 +353,95 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     )
                 }
             }
-            if (state.permissions.isNotEmpty()) {
-                PermissionStrip(state.permissions, viewModel::replyPermission)
-            }
-            if (questionForm != null) {
-                QuestionAnswerBar(
-                    form = questionForm,
-                    onReply = viewModel::replyForm,
-                    onCancel = viewModel::cancelForm,
-                )
-            } else {
-            Composer(
-                value = state.draft,
-                onValueChange = viewModel::setDraft,
-                directory = directory,
-                running = state.running,
-                busy = state.busy,
-                attachments = state.attachments,
-                imageModel = viewModel::imageModel,
-                focusRequest = focusRequest,
-                onAttach = { uri, name ->
-                    viewModel.upload(uri) { file -> viewModel.addAttachment(file.copy(name = name ?: file.name)) }
-                },
-                onRemove = viewModel::removeAttachment,
-                onSend = { text, delivery, done ->
-                    stick = true
-                    viewModel.send(text, state.attachments, delivery) { sent -> done(sent) }
-                },
-                onStop = viewModel::stop,
-                onOpenChats = {
-                    sessionsOpen = true
-                    viewModel.refreshSessions("")
-                    viewModel.loadProjects()
-                },
-                onCommand = { command ->
-                    when (command) {
-                        "new" -> {
-                            newChat()
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding(),
+            ) {
+                MorphDock(
+                    progress = dockProgress,
+                    expandedHeight = expandedHeight,
+                    sessionsListState = sessionsListState,
+                    query = sessionsQuery,
+                    onQueryChange = { sessionsQuery = it },
+                    onProgress = { dockProgress = it },
+                    onDragStart = {
+                        dockJob?.cancel()
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    },
+                    onGrab = { dockJob?.cancel() },
+                    onSettle = { open -> animateDock(if (open) 1f else 0f) },
+                    onToggle = { if (dockProgress > 0.5f) closeDock() else openDock() },
+                    onClose = { closeDock() },
+                    collapsed = {
+                        if (state.permissions.isNotEmpty()) {
+                            PermissionStrip(state.permissions, viewModel::replyPermission)
                         }
-                        "dir" -> {
-                            pickerCreates = false
-                            pickerOpen = true
-                            viewModel.loadProjects()
+                        if (questionForm != null) {
+                            QuestionAnswerBar(
+                                form = questionForm,
+                                onReply = viewModel::replyForm,
+                                onCancel = viewModel::cancelForm,
+                            )
+                        } else {
+                            ComposerBody(
+                                value = state.draft,
+                                onValueChange = viewModel::setDraft,
+                                directory = directory,
+                                running = state.running,
+                                busy = state.busy,
+                                attachments = state.attachments,
+                                imageModel = viewModel::imageModel,
+                                focusRequest = focusRequest,
+                                onAttach = { uri, name ->
+                                    viewModel.upload(uri) { file -> viewModel.addAttachment(file.copy(name = name ?: file.name)) }
+                                },
+                                onRemove = viewModel::removeAttachment,
+                                onSend = { text, delivery, done ->
+                                    stick = true
+                                    viewModel.send(text, state.attachments, delivery) { sent -> done(sent) }
+                                },
+                                onStop = viewModel::stop,
+                                onCommand = { command ->
+                                    when (command) {
+                                        "new" -> newChat()
+                                        "dir" -> {
+                                            pickerCreates = false
+                                            pickerOpen = true
+                                            viewModel.loadProjects()
+                                        }
+                                        "settings" -> settingsOpen = true
+                                        "compact" -> viewModel.compactSession()
+                                        "revert" -> viewModel.revertLast()
+                                        "fork" -> viewModel.forkLastUser()
+                                        "fork-here" -> viewModel.forkAt(null)
+                                        "retry" -> viewModel.retryLast()
+                                        "theme" -> themeOpen = true
+                                        "clear" -> viewModel.setDraft("")
+                                        "help" -> viewModel.note("Команды: /new /dir /settings /compact /revert /fork /fork-here /retry /theme /clear /help")
+                                    }
+                                },
+                            )
                         }
-                        "settings" -> settingsOpen = true
-                        "compact" -> viewModel.compactSession()
-                        "revert" -> viewModel.revertLast()
-                        "fork" -> viewModel.forkLastUser()
-                        "fork-here" -> viewModel.forkAt(null)
-                        "retry" -> viewModel.retryLast()
-                        "theme" -> themeOpen = true
-                        "clear" -> viewModel.setDraft("")
-                        "help" -> viewModel.note("Команды: /new /dir /settings /compact /revert /fork /fork-here /retry /theme /clear /help")
-                    }
-                },
+                    },
+                    sessions = {
+                        SessionsContent(
+                            state = state,
+                            query = sessionsQuery,
+                            listState = sessionsListState,
+                            onSelect = { id ->
+                                closeDock()
+                                viewModel.openSession(id)
+                            },
+                            onNew = {
+                                closeDock()
+                                newChat()
+                            },
+                        )
+                    },
                 )
             }
         }
@@ -353,9 +467,7 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                 connecting = state.streamStatus == StreamStatus.Connecting,
                 parent = state.selected?.parentID != null,
                 onParent = viewModel::backToParent,
-                onNew = {
-                    newChat()
-                },
+                onNew = { newChat() },
                 onSwipeDown = { topMenuOpen = true },
             )
             if (!state.healthOk) {
@@ -395,31 +507,12 @@ fun ChatScreen(state: UiState, viewModel: AppViewModel) {
                     "fork-here" -> viewModel.forkAt(null)
                     "retry" -> viewModel.retryLast()
                     "parent" -> viewModel.backToParent()
-                    "chats" -> {
-                        sessionsOpen = true
-                        viewModel.refreshSessions("")
-                        viewModel.loadProjects()
-                    }
+                    "chats" -> openDock()
                 }
             },
         )
     }
 
-    if (sessionsOpen) {
-        SessionsSheet(
-            state = state,
-            onDismiss = { sessionsOpen = false },
-            onSelect = { id ->
-                sessionsOpen = false
-                viewModel.openSession(id)
-            },
-            onSearch = viewModel::refreshSessions,
-            onNew = {
-                sessionsOpen = false
-                newChat()
-            },
-        )
-    }
     if (themeOpen) {
         ThemeSheet(
             current = state.settings.theme,

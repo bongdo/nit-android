@@ -60,6 +60,9 @@ class ApiContractTest {
                     path.endsWith("/api/sessions/ses_1") -> json(
                         """{"data":{"id":"ses_1","title":"T","location":{"directory":"/work"},"time":{"created":1,"updated":2}}}""",
                     )
+                    path.contains("/messages/msg_1") -> json(
+                        """{"data":{"id":"msg_1","type":"assistant","time":{"created":1},"content":[{"type":"text","text":"full"}]}}""",
+                    )
                     path.contains("/messages") -> json(
                         """{"data":[{"id":"msg_1","type":"assistant","time":{"created":1},"content":[{"type":"text","text":"hi"}]}],"previous":null}""",
                     )
@@ -91,6 +94,7 @@ class ApiContractTest {
         assertEquals("T", api.sessions()[0].title)
         assertEquals("/work", api.session("ses_1").location.directory)
         assertEquals("hi", api.messages("ses_1").data[0].content!![0].text)
+        assertEquals("full", api.message("ses_1", "msg_1").content!![0].text)
         assertEquals("edit", api.permissions("ses_1")[0].action)
         assertEquals("Q", api.forms("ses_1")[0].title)
         assertEquals("/work", api.projects()[0].canonical)
