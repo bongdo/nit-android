@@ -2,6 +2,10 @@
 
 
 > The package name is `space.bongdo.nit`; only the repository was renamed.
+
+![login](docs/screenshots/login.png)
+
+Вход: имя, пароль и 2FA через страницу гейта. Кука сессии хранится в Android Keystore.
 Нативный Android-клиент к `nit-gui`. Один экран: морфящий док снизу (инпут,
 поиск и список чатов), транскрипт, композер. Своего бэкенда нет: приложение говорит с существующим
 Go-прокси `nit-gui`, который уже держит сессии OpenCode, загрузки, SSE и гейт.
